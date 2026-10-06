@@ -30,7 +30,7 @@ buttons. Successful deletion leaves the archived chat; restoration opens it.
 
 ## Install
 
-Requires OpenCode V2.0.24, Git, and Node 22.18 or newer. Build the private
+Requires OpenCode V2.0.24, Git, and Node 24 or newer. Build the private
 checkout:
 
 ```sh
