@@ -24,6 +24,7 @@ export const Bundle = z
   })
   .superRefine((bundle, context) => {
     const seen = new Set<string>();
+    const messageIDs = new Set<string>();
     const all = new Set(bundle.sessions.map((session) => session.info.id));
     if (bundle.sessions[0]?.info.id !== bundle.rootSessionID) {
       context.addIssue({
@@ -31,16 +32,18 @@ export const Bundle = z
         message: 'The root session must be first',
       });
     }
+    if (bundle.sessions[0]?.info.projectID !== bundle.projectID) {
+      context.addIssue({
+        code: 'custom',
+        message: 'The root session must match the archive project',
+      });
+    }
     for (const session of bundle.sessions) {
       const { id, parentID, projectID } = session.info;
-      if (
-        !SessionID.safeParse(id).success ||
-        seen.has(id) ||
-        projectID !== bundle.projectID
-      ) {
+      if (!SessionID.safeParse(id).success || seen.has(id) || !projectID) {
         context.addIssue({
           code: 'custom',
-          message: 'Invalid, duplicate, or cross-project session',
+          message: 'Invalid or duplicate session',
         });
       }
       if (id !== bundle.rootSessionID && (!parentID || !seen.has(parentID))) {
@@ -61,9 +64,18 @@ export const Bundle = z
           message: 'V2 import cannot restore fork or revert state',
         });
       }
-      const messageIDs = session.messages.map((message) => message.id);
-      if (new Set(messageIDs).size !== messageIDs.length) {
-        context.addIssue({ code: 'custom', message: 'Duplicate message IDs' });
+      if (session.info.location.workspaceID !== undefined)
+        context.addIssue({
+          code: 'custom',
+          message: 'V2 HTTP import cannot restore workspace identity',
+        });
+      for (const message of session.messages) {
+        if (messageIDs.has(message.id))
+          context.addIssue({
+            code: 'custom',
+            message: 'Duplicate message IDs',
+          });
+        messageIDs.add(message.id);
       }
       seen.add(id);
     }

@@ -5,7 +5,9 @@
 Accepted. Supersedes the confirmation requirements in
 [ADR 0001](0001-file-backed-transcript-archives.md) and
 [ADR 0002](0002-desktop-session-commands.md). Implements the updated
-[session archive PRD](../session-archive.md).
+[session archive PRD](../session-archive.md). Descendant project refusals are
+superseded by [ADR 0005](0005-cross-project-session-trees.md); root scope checks
+remain.
 
 ## Context
 

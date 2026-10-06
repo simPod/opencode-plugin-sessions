@@ -116,15 +116,18 @@ private storage and an encrypted disk or filesystem if needed. Do not commit
 archive files to Git or expose their directory through HTTP.
 
 Each versioned JSON file contains the root and all descendants in parent-first
-order, their original locations, and a SHA-256 checksum. Writes are synced,
-published atomically without overwriting an existing archive, and read back
-before deletion. The checksum detects accidental damage, not malicious edits by
-someone who can write the directory.
+order, their original project IDs and directories, and a SHA-256 checksum. A
+family can span multiple projects, including non-Git locations. The whole
+archive stays in the root project's folder; it is not split between descendant
+projects. Writes are synced, published atomically without overwriting an
+existing archive, and read back before deletion. The checksum detects accidental
+damage, not malicious edits by someone who can write the directory.
 
 ## Safety and limitations
 
-- Running sessions, queued inbox work, unfinished messages/tools, cross-project
-  descendants, and fork/revert state prevent archiving.
+- Running sessions, queued inbox work, unfinished messages/tools, and
+  fork/revert state prevent archiving, including in descendants from other
+  projects.
 - All message pages and descendants are collected. The plugin compares raw
   messages with the native export and rechecks the whole family immediately
   before deletion. These checks reduce the concurrency risk; they do not remove
@@ -132,8 +135,21 @@ someone who can write the directory.
 - Delete removes descendants recursively. Every known descendant must have a
   verified copy before that operation.
 - Restore refuses existing IDs and missing external parents. Parents are
-  imported before children at their original working directories. A removed
-  worktree may need to be recreated before restoration.
+  imported before children at their original working directories. Before any
+  import, every saved directory must pass a fresh server filesystem check and
+  resolve to its original project ID. Recreate removed worktrees or restore the
+  original project identity before restoring. This project lookup can be cached,
+  so the plugin also verifies each imported project ID, location, and transcript
+  and stops if the server changes them. It does not silently remap project IDs.
+- The root project's archive contains private transcripts from every descendant
+  project. Project folders organize storage; they are not separate authorization
+  boundaries. Use only a server and archive storage you trust for all these
+  projects. Existing single-project archives remain readable; older plugin
+  builds refuse new cross-project archives.
+- V2.0.24's public HTTP API strips workspace IDs and cannot restore them.
+  Visible workspace IDs are refused before archive writes or restore imports,
+  but this API cannot detect every workspace-linked live session. Do not rely on
+  this plugin to preserve workspace identity.
 - Archives remain after successful or partial restoration and after deletion
   errors. There is no automatic rollback or deletion of restored sessions. After
   a partial restore, inspect existing IDs before trying recovery; a normal retry
@@ -150,9 +166,9 @@ plugin does not fabricate native events or write SQLite.
 ## Development
 
 ```sh
-npm run typecheck
-npm test
-npm run build
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
 CI runs these commands. Tests use temporary files and a simulated API; they do

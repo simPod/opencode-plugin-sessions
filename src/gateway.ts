@@ -7,6 +7,7 @@ import type {
 
 export interface SessionGateway {
   get(id: string): Promise<SessionInfo>;
+  resolveProject(directory: string): Promise<string>;
   children(id: string): Promise<SessionInfo[]>;
   messages(id: string): Promise<SessionMessageInfo[]>;
   busy(id: string): Promise<boolean>;
@@ -46,6 +47,13 @@ export function gateway(
 
   return {
     get: (sessionID) => client.session.get({ sessionID }, options),
+    resolveProject: async (directory) => {
+      // Cached location metadata can outlive a removed directory. Native file
+      // listing checks the server filesystem on every request, even if empty.
+      await client.file.list({ location: { directory } }, options);
+      return (await client.location.get({ location: { directory } }, options))
+        .project.id;
+    },
     children: (id) => sessions(id),
     existing: async () =>
       new Set((await sessions()).map((session) => session.id)),

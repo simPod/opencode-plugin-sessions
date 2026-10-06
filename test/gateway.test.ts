@@ -49,9 +49,10 @@ function query(request: Request) {
 }
 
 test('generated HTTP client reads all child and existing-ID pages without directory or project filters', async () => {
-  const children = Array.from({ length: 101 }, (_, index) =>
-    info(`ses_child${index}`, 'ses_root', `/synthetic/worktree${index}`),
-  );
+  const children = Array.from({ length: 101 }, (_, index) => ({
+    ...info(`ses_child${index}`, 'ses_root', `/synthetic/worktree${index}`),
+    projectID: index % 2 ? 'project-b' : 'project-a',
+  }));
   const grandchild = info(
     'ses_grandchild',
     'ses_child100',
@@ -150,7 +151,7 @@ test('generated HTTP client pages raw messages in ascending order without a mess
   assert.equal(f.requests.length, 2);
 });
 
-test('native get, unsanitized export, import location, and recursive remove use generated API envelopes', async () => {
+test('native get, project resolution, unsanitized export, import location, and recursive remove use generated API envelopes', async () => {
   const nativeInfo = info(
     'ses_root',
     'ses_parent',
@@ -170,6 +171,30 @@ test('native get, unsanitized export, import location, and recursive remove use 
   let imported: unknown;
   const f = httpGateway(async (request) => {
     const path = new URL(request.url).pathname;
+    if (path === '/api/fs/list') {
+      assert.equal(request.method, 'GET');
+      assert.deepEqual(query(request), {
+        'location[directory]': '/synthetic/moved-worktree',
+      });
+      return Response.json({
+        location: { directory: '/synthetic/moved-worktree' },
+        data: [],
+      });
+    }
+    if (path === '/api/location') {
+      assert.equal(request.method, 'GET');
+      assert.deepEqual(query(request), {
+        'location[directory]': '/synthetic/moved-worktree',
+      });
+      return Response.json({
+        directory: '/synthetic/moved-worktree',
+        project: {
+          id: 'project-a',
+          directory: '/synthetic',
+          canonical: '/synthetic',
+        },
+      });
+    }
     if (path === '/api/session/ses_root' && request.method === 'GET') {
       assert.deepEqual(query(request), {});
       return Response.json({ data: nativeInfo });
@@ -195,6 +220,10 @@ test('native get, unsanitized export, import location, and recursive remove use 
   });
 
   assert.deepEqual(await f.sessions.get('ses_root'), nativeInfo);
+  assert.equal(
+    await f.sessions.resolveProject(nativeInfo.location.directory),
+    'project-a',
+  );
   assert.deepEqual(await f.sessions.export('ses_root'), transfer);
   assert.deepEqual(await f.sessions.import(transfer), nativeInfo);
   assert.deepEqual(imported, {
@@ -202,7 +231,27 @@ test('native get, unsanitized export, import location, and recursive remove use 
     location: { directory: '/synthetic/moved-worktree' },
   });
   assert.equal(await f.sessions.remove('ses_root'), undefined);
-  assert.equal(f.requests.length, 4);
+  assert.equal(f.requests.length, 6);
+});
+
+test('project preflight refuses unavailable directories despite matching cached project metadata', async (t) => {
+  for (const status of [404, 403, 500])
+    await t.test(`filesystem refusal ${status}`, async () => {
+      const f = httpGateway((request) => {
+        const path = new URL(request.url).pathname;
+        if (path === '/api/fs/list') return new Response('', { status });
+        assert.equal(path, '/api/location');
+        return Response.json({
+          directory: '/synthetic/removed',
+          project: {
+            id: 'project-a',
+            directory: '/synthetic',
+            canonical: '/synthetic',
+          },
+        });
+      });
+      await assert.rejects(f.sessions.resolveProject('/synthetic/removed'));
+    });
 });
 
 test('native active and inbox responses independently prevent treating queued or running sessions as idle', async (t) => {

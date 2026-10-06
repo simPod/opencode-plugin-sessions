@@ -26,6 +26,7 @@ test('TUI registers only archive and restore, and restores by selection or ID wi
     plugin.setup({
       location: { directory: '/synthetic/project' },
       client: {
+        file: { list: async () => ({ location: { directory: '/synthetic/project' }, data: [] }) },
         location: { get: async () => ({ project: { id: 'test-project' } }) },
         rpc: () => ({
           list: async () => bundle ? [{ id: bundle.id, title: 'Test session', createdAt: bundle.createdAt, sessionCount: 1, rootSessionID: 'ses_test' }] : [],

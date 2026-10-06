@@ -77,6 +77,9 @@ function fixture() {
   };
   const host: DesktopHost = {
     sessions: {
+      async resolveProject() {
+        return 'project-a';
+      },
       async get(id) {
         const item = state.get(id);
         assert(item);

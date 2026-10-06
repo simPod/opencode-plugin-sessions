@@ -43,6 +43,8 @@ function assertSettled(messages: SessionMessageInfo[]): void {
 
 // Native transfer does not restore these fields. Do not silently discard them.
 function assertRestorable(info: SessionInfo): void {
+  if (info.location.workspaceID !== undefined)
+    throw new Error('V2 HTTP import cannot restore workspace identity.');
   if (info.fork || info.revert) {
     throw new Error(
       'V2 import cannot restore fork or revert state. This session cannot be archived.',
@@ -82,13 +84,9 @@ export class SessionArchive {
       const children = await this.#sessions.children(parent.id);
       children.sort((left, right) => left.id.localeCompare(right.id));
       for (const child of children) {
-        if (
-          seen.has(child.id) ||
-          child.parentID !== parent.id ||
-          child.projectID !== root.projectID
-        ) {
+        if (seen.has(child.id) || child.parentID !== parent.id) {
           throw new Error(
-            'The session hierarchy changed or contains cross-project descendants.',
+            'The session hierarchy changed or contains duplicate descendants.',
           );
         }
         seen.add(child.id);
@@ -106,7 +104,8 @@ export class SessionArchive {
       if (
         transfer.info.id !== session.id ||
         transfer.info.parentID !== session.parentID ||
-        transfer.info.projectID !== root.projectID ||
+        transfer.info.projectID !== session.projectID ||
+        fingerprint(transfer.info.location) !== fingerprint(session.location) ||
         fingerprint(messages) !== fingerprint(transfer.messages)
       ) {
         throw new Error(
@@ -215,6 +214,21 @@ export class SessionArchive {
       const parentID = bundle.sessions[0]?.info.parentID;
       if (parentID && !existing.has(parentID))
         throw new Error('Restore the archived session’s parent first.');
+      // Native import derives project identity from the location, not info.projectID.
+      // Check the entire family before importing its root, including foreign projects.
+      for (const transfer of bundle.sessions) {
+        const projectID = await this.#sessions
+          .resolveProject(transfer.info.location.directory)
+          .catch(() => {
+            throw new Error(
+              `The original project location for ${transfer.info.id} is unavailable. Nothing was imported; the archive is retained. Restore its original project location before retrying.`,
+            );
+          });
+        if (projectID !== transfer.info.projectID)
+          throw new Error(
+            `The saved location for ${transfer.info.id} now belongs to another project. Nothing was imported; the archive is retained. Restore its original project location before retrying.`,
+          );
+      }
       let imported = 0;
       try {
         for (const transfer of bundle.sessions) {
@@ -225,7 +239,10 @@ export class SessionArchive {
           });
           if (
             restored.id !== transfer.info.id ||
-            restored.parentID !== transfer.info.parentID
+            restored.parentID !== transfer.info.parentID ||
+            restored.projectID !== transfer.info.projectID ||
+            fingerprint(restored.location) !==
+              fingerprint(transfer.info.location)
           ) {
             throw new Error('The server restored a different session identity');
           }

@@ -61,6 +61,18 @@ function bundle(
 test('private archive round-trip preserves exact JSON bytes and publishes without overwrite', async (t) => {
   const { storage, storageDirectory } = await fixture(t);
   const original = bundle();
+  const root = original.sessions[0];
+  assert(root);
+  original.sessions.push({
+    info: {
+      ...root.info,
+      id: 'ses_child',
+      parentID: root.info.id,
+      projectID: 'project-b',
+      location: { directory: '/synthetic/other-project' },
+    },
+    messages: [],
+  });
   const saved = await storage.save(original);
   assert.deepEqual(await storage.read(saved.id), original);
   const bytes = await readFile(saved.path);
@@ -81,7 +93,7 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
       rootSessionID: original.rootSessionID,
       title: 'Synthetic fixture',
       createdAt: original.createdAt,
-      sessionCount: 1,
+      sessionCount: 2,
     },
   ]);
   await assert.rejects(
@@ -113,6 +125,11 @@ test('project identity survives renames and isolates projects with the same name
   assert.notEqual(dirname(isolated.path), dirname(first.path));
   assert.equal((await other.list()).length, 1);
   await assert.rejects(other.save(original), /Cannot save archive/);
+  const wrongRoot = bundle();
+  const root = wrongRoot.sessions[0];
+  assert(root);
+  root.info.projectID = 'project-b';
+  await assert.rejects(storage.save(wrongRoot), /Cannot save archive/);
   await copyFile(first.path, isolated.path);
   await assert.rejects(other.read(first.id), /Cannot read archive/);
   const globalA = new FileArchiveStorage({
@@ -152,6 +169,28 @@ test('corrupt JSON, checksum, and native transfer data fail visibly without disc
     ...bundle('project-a', saved.id),
     sessions: [{ info: { id: 'ses_fixture' }, messages: [] }],
   };
+  const wrongRoot = bundle('project-a', saved.id);
+  const root = wrongRoot.sessions[0];
+  assert(root);
+  root.info.projectID = 'project-b';
+  const duplicateMessages = bundle('project-a', saved.id);
+  const duplicateRoot = duplicateMessages.sessions[0];
+  assert(duplicateRoot);
+  duplicateRoot.messages.push({
+    id: 'msg_duplicate',
+    type: 'user',
+    time: { created: 1700000000000 },
+    text: 'Synthetic message',
+  });
+  duplicateMessages.sessions.push({
+    info: {
+      ...duplicateRoot.info,
+      id: 'ses_child',
+      parentID: duplicateRoot.info.id,
+      projectID: 'project-b',
+    },
+    messages: structuredClone(duplicateRoot.messages),
+  });
   const variants = [
     '{"private-transcript":"secret text",',
     valid.replace(
@@ -159,6 +198,11 @@ test('corrupt JSON, checksum, and native transfer data fail visibly without disc
       `"checksum":"${'0'.repeat(64)}"`,
     ),
     JSON.stringify({ checksum: fingerprint(invalid), bundle: invalid }),
+    JSON.stringify({ checksum: fingerprint(wrongRoot), bundle: wrongRoot }),
+    JSON.stringify({
+      checksum: fingerprint(duplicateMessages),
+      bundle: duplicateMessages,
+    }),
   ];
   for (const corrupt of variants) {
     await writeFile(saved.path, corrupt);
