@@ -1,11 +1,12 @@
 import { Rpc } from '@opencode/plugin/rpc';
 import { z } from 'zod';
-import { ArchiveID, Bundle, Summary } from './schema.ts';
+import { ArchiveID, Bundle, RestoreMappings, Summary } from './schema.ts';
 
 export const Archives = Rpc.define({
   id: 'simpod-session-archive',
   events: {},
   methods: {
+    restoreMappings: { input: z.strictObject({}), output: RestoreMappings },
     instance: {
       input: z.strictObject({}),
       output: z.strictObject({ id: z.uuid() }),

@@ -13,6 +13,7 @@ import {
   Bundle,
   type ArchiveBundle,
   type ArchiveStorage,
+  type RestoreMapping,
 } from '../src/schema.ts';
 
 const archiveID = randomUUID();
@@ -36,7 +37,7 @@ function transfer(id: string, projectID = 'project-a'): SessionTransferData {
   };
 }
 
-function fixture() {
+function fixture(restoreMappings: RestoreMapping[] = []) {
   const state = new Map<string, SessionTransferData>([
     ['ses_owner', transfer('ses_owner')],
     ['ses_target', transfer('ses_target')],
@@ -130,8 +131,9 @@ function fixture() {
   const commands = desktopCommands(
     async () => host,
     storage,
-    'project-a',
+    { projectID: 'project-a', directory: '/synthetic/project' },
     abort.signal,
+    restoreMappings,
   );
   async function run(
     name: string,
@@ -199,26 +201,62 @@ test('desktop can archive the open session without trying to report to the delet
   assert.deepEqual(f.questions, []);
 });
 
-test('desktop restore with an ID imports immediately without a picker and retains its archive', async () => {
-  const f = fixture();
-  f.archived();
-  await f.run('session-restore', archiveID);
-  assert(f.state.has('ses_archived'));
-  assert(f.bundles.has(archiveID));
-  assert.deepEqual(f.questions, []);
-  assert.deepEqual(f.events, ['import']);
+test('desktop restore with an ID imports immediately without a picker and retains its archive', async (t) => {
+  for (const mapped of [false, true])
+    await t.test(mapped ? 'mapped root' : 'original root', async () => {
+      const f = fixture(
+        mapped
+          ? [
+              {
+                from: {
+                  projectID: 'project-old',
+                  directory: '/synthetic/project',
+                },
+                to: { projectID: 'project-a', directory: '/synthetic/project' },
+              },
+            ]
+          : [],
+      );
+      f.archived(mapped ? 'project-old' : 'project-a');
+      const original = structuredClone(f.bundles.get(archiveID));
+      await f.run('session-restore', archiveID);
+      assert(f.state.has('ses_archived'));
+      assert(f.bundles.has(archiveID));
+      assert.deepEqual(f.questions, []);
+      assert.deepEqual(f.events, ['import']);
+      assert.equal(f.state.get('ses_archived')?.info.projectID, 'project-a');
+      assert.deepEqual(f.bundles.get(archiveID), original);
+    });
 });
 
-test('desktop restore without an ID restores immediately after selection and retains its archive', async () => {
-  const f = fixture();
-  f.archived();
-  f.answers.push({ archive: archiveID });
-  await f.run('session-restore');
-  assert(f.state.has('ses_archived'));
-  assert(f.bundles.has(archiveID));
-  assert.equal(f.questions.length, 1);
-  assert.deepEqual(f.events, ['import']);
-  assert.match(f.reports[0] ?? '', /Open ses_archived/);
+test('desktop restore without an ID restores immediately after selection and retains its archive', async (t) => {
+  for (const mapped of [false, true])
+    await t.test(mapped ? 'mapped root' : 'original root', async () => {
+      const f = fixture(
+        mapped
+          ? [
+              {
+                from: {
+                  projectID: 'project-old',
+                  directory: '/synthetic/project',
+                },
+                to: { projectID: 'project-a', directory: '/synthetic/project' },
+              },
+            ]
+          : [],
+      );
+      f.archived(mapped ? 'project-old' : 'project-a');
+      const original = structuredClone(f.bundles.get(archiveID));
+      f.answers.push({ archive: archiveID });
+      await f.run('session-restore');
+      assert(f.state.has('ses_archived'));
+      assert(f.bundles.has(archiveID));
+      assert.equal(f.questions.length, 1);
+      assert.deepEqual(f.events, ['import']);
+      assert.match(f.reports[0] ?? '', /Open ses_archived/);
+      assert.equal(f.state.get('ses_archived')?.info.projectID, 'project-a');
+      assert.deepEqual(f.bundles.get(archiveID), original);
+    });
 });
 
 test('desktop restore picker cancellation, invalid selection, and project mismatch never import', async (t) => {

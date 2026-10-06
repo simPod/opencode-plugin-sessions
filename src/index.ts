@@ -6,10 +6,13 @@ import { z } from 'zod';
 import { desktopClient } from './desktop-client.ts';
 import { desktopCommands } from './desktop.ts';
 import { Archives } from './rpc.ts';
+import { restoreStorage } from './restore-storage.ts';
+import { RestoreMappings } from './schema.ts';
 import { FileArchiveStorage } from './storage.ts';
 
 const Options = z.strictObject({
   storageDirectory: z.string().min(1).optional(),
+  restoreMappings: RestoreMappings.default([]),
 });
 
 export default Plugin.define({
@@ -30,7 +33,7 @@ export default Plugin.define({
         'storageDirectory must be an absolute path or start with ~/',
       );
 
-    const storage = new FileArchiveStorage({
+    const primary = new FileArchiveStorage({
       storageDirectory: directory,
       projectID: context.location.project.id,
       projectName: basename(
@@ -40,9 +43,16 @@ export default Plugin.define({
       ),
       projectDirectory: context.location.directory,
     });
+    const storage = restoreStorage(primary, {
+      storageDirectory: directory,
+      projectID: context.location.project.id,
+      directory: context.location.directory,
+      restoreMappings: options.restoreMappings,
+    });
     const instanceID = randomUUID();
     const lifetime = new AbortController();
     const registration = await context.rpc.register(Archives, {
+      restoreMappings: async () => options.restoreMappings,
       instance: async () => ({ id: instanceID }),
       list: () => storage.list(),
       read: ({ id }) => storage.read(id),
@@ -63,8 +73,12 @@ export default Plugin.define({
             lifetime.signal,
           ),
         storage,
-        context.location.project.id,
+        {
+          projectID: context.location.project.id,
+          directory: context.location.directory,
+        },
         lifetime.signal,
+        options.restoreMappings,
       );
       commands = await context.command.transform((editor) => {
         for (const command of definitions) editor.add(command);

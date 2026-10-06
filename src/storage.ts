@@ -40,18 +40,21 @@ export class FileArchiveStorage implements ArchiveStorage {
   private readonly projectFolder: string;
   private readonly projectSuffix: string;
   private readonly projectDirectory: string | undefined;
+  private readonly readOnly: boolean;
 
   constructor(options: {
     storageDirectory: string;
     projectID: string;
     projectName: string;
     projectDirectory?: string;
+    readOnly?: boolean;
   }) {
     if (!options.storageDirectory || !options.projectID)
       throw new Error('Invalid archive storage configuration');
     this.storageDirectory = resolve(options.storageDirectory);
     this.projectID = options.projectID;
     this.projectDirectory = options.projectDirectory;
+    this.readOnly = options.readOnly ?? false;
     const key =
       options.projectID === 'global'
         ? `${options.projectID}\0${options.projectDirectory ?? options.projectName}`
@@ -65,19 +68,28 @@ export class FileArchiveStorage implements ArchiveStorage {
     this.projectFolder = `${name}${this.projectSuffix}`;
   }
 
-  private async directory(): Promise<string> {
-    await mkdir(this.storageDirectory, { recursive: true, mode: 0o700 });
-    privateEntry(await lstat(this.storageDirectory), true);
+  private async directory(): Promise<string | undefined> {
+    if (!this.readOnly)
+      await mkdir(this.storageDirectory, { recursive: true, mode: 0o700 });
+    try {
+      privateEntry(await lstat(this.storageDirectory), true);
+    } catch (error) {
+      if (this.readOnly && hasCode(error, 'ENOENT')) return undefined;
+      throw error;
+    }
     const matches = (await readdir(this.storageDirectory)).filter((name) =>
       name.endsWith(this.projectSuffix),
     );
     if (matches.length > 1)
       throw new Error('Ambiguous archive project directories');
+    if (this.readOnly && matches.length === 0) return undefined;
     const path = join(this.storageDirectory, matches[0] ?? this.projectFolder);
-    try {
-      await mkdir(path, { mode: 0o700 });
-    } catch (error) {
-      if (!hasCode(error, 'EEXIST')) throw error;
+    if (!this.readOnly) {
+      try {
+        await mkdir(path, { mode: 0o700 });
+      } catch (error) {
+        if (!hasCode(error, 'EEXIST')) throw error;
+      }
     }
     privateEntry(await lstat(path), true);
     return path;
@@ -139,6 +151,7 @@ export class FileArchiveStorage implements ArchiveStorage {
 
   async save(input: ArchiveBundle): Promise<{ id: string; path: string }> {
     try {
+      if (this.readOnly) throw new Error('Archive storage is read-only');
       const bundle = Bundle.parse(input);
       if (bundle.projectID !== this.projectID)
         throw new Error('Archive belongs to another project');
@@ -151,6 +164,7 @@ export class FileArchiveStorage implements ArchiveStorage {
       }
       const id = this.id(bundle.id);
       const directory = await this.directory();
+      if (directory === undefined) throw new Error('Missing archive storage');
       const path = join(directory, `${id}.json`);
       const temporary = join(directory, `.${randomUUID()}.tmp`);
       const checksum = fingerprint(bundle);
@@ -183,10 +197,19 @@ export class FileArchiveStorage implements ArchiveStorage {
     }
   }
 
-  async read(value: string): Promise<ArchiveBundle> {
+  async find(value: string): Promise<ArchiveBundle | undefined> {
     const id = this.id(value);
     try {
-      return await this.readFile(await this.directory(), id);
+      const directory = await this.directory();
+      if (directory === undefined) return undefined;
+      try {
+        await lstat(join(directory, `${id}.json`));
+      } catch (error) {
+        if (!hasCode(error, 'ENOENT')) throw error;
+        privateEntry(await lstat(directory), true);
+        return undefined;
+      }
+      return await this.readFile(directory, id);
     } catch {
       throw new Error(
         'Cannot read archive: missing, corrupt, or unsafe archive',
@@ -194,9 +217,17 @@ export class FileArchiveStorage implements ArchiveStorage {
     }
   }
 
+  async read(value: string): Promise<ArchiveBundle> {
+    const bundle = await this.find(value);
+    if (bundle === undefined)
+      throw new Error('Cannot read archive: missing, corrupt, or unsafe archive');
+    return bundle;
+  }
+
   async list(): Promise<ArchiveSummary[]> {
     try {
       const directory = await this.directory();
+      if (directory === undefined) return [];
       const summaries: ArchiveSummary[] = [];
       for (const name of (await readdir(directory)).sort()) {
         if (!name.endsWith('.json')) continue;

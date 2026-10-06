@@ -29,6 +29,10 @@ test('TUI registers only archive and restore, and restores by selection or ID wi
         file: { list: async () => ({ location: { directory: '/synthetic/project' }, data: [] }) },
         location: { get: async () => ({ project: { id: 'test-project' } }) },
         rpc: () => ({
+          restoreMappings: async () => [{
+            from: { projectID: 'old-project', directory: '/synthetic/old-project' },
+            to: { projectID: 'test-project', directory: '/synthetic/project' },
+          }],
           list: async () => bundle ? [{ id: bundle.id, title: 'Test session', createdAt: bundle.createdAt, sessionCount: 1, rootSessionID: 'ses_test' }] : [],
           read: async () => structuredClone(bundle),
           save: async (input) => { bundle = structuredClone(input.bundle); return { id: bundle.id, path: '/synthetic/archive.json' }; },
@@ -62,18 +66,32 @@ test('TUI registers only archive and restore, and restores by selection or ID wi
     assert.equal(state.size, 0);
     assert.deepEqual(bundle.sessions, [original]);
     assert.equal(route.type, 'home');
+    bundle.projectID = 'old-project';
+    bundle.sessions[0].info.projectID = 'old-project';
+    bundle.sessions[0].info.location.directory = '/synthetic/old-project';
+    const originalArchive = structuredClone(bundle);
     const restore = commands.find(command => command.slash.name === 'session-restore');
     await restore.run();
     assert.equal(selections, 1);
     assert.equal(route.sessionID, 'ses_test');
     assert.deepEqual(state.get('ses_test').messages, original.messages);
+    assert.equal(state.get('ses_test').info.projectID, 'test-project');
+    assert.equal(state.get('ses_test').info.location.directory, '/synthetic/project');
+    assert.deepEqual(bundle, originalArchive);
     assert.equal(toasts.at(-1).variant, 'success');
     await archive.run();
     assert.equal(state.size, 0);
+    bundle.projectID = 'old-project';
+    bundle.sessions[0].info.projectID = 'old-project';
+    bundle.sessions[0].info.location.directory = '/synthetic/old-project';
+    const secondArchive = structuredClone(bundle);
     await restore.run(bundle.id);
     assert.equal(selections, 1);
     assert.equal(route.sessionID, 'ses_test');
     assert.deepEqual(state.get('ses_test').messages, original.messages);
+    assert.equal(state.get('ses_test').info.projectID, 'test-project');
+    assert.equal(state.get('ses_test').info.location.directory, '/synthetic/project');
+    assert.deepEqual(bundle, secondArchive);
     assert.equal(toasts.at(-1).variant, 'success');
     console.log('Archive and selected restore completed without confirmation.');
   `;

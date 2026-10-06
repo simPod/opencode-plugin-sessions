@@ -1,10 +1,41 @@
 import type { SessionTransferData } from '@opencode/client';
+import { isAbsolute } from 'node:path';
 import { SessionTransfer } from '@opencode/schema/session-transfer';
 import { Schema } from 'effect';
 import { z } from 'zod';
 
 export const SessionID = z.string().regex(/^ses_[a-zA-Z0-9]+$/);
 export const ArchiveID = z.uuid();
+const RestoreLocation = z.strictObject({
+  projectID: z.string().min(1),
+  directory: z
+    .string()
+    .refine(isAbsolute, 'Restore directories must be absolute server paths'),
+});
+export const RestoreMappings = z
+  .array(
+    z.strictObject({
+      from: RestoreLocation,
+      to: RestoreLocation,
+    }),
+  )
+  .superRefine((mappings, context) => {
+    const seen = new Set<string>();
+    for (const [index, mapping] of mappings.entries()) {
+      const key = JSON.stringify([
+        mapping.from.projectID,
+        mapping.from.directory,
+      ]);
+      if (seen.has(key))
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'from'],
+          message: 'Duplicate restore mapping source',
+        });
+      seen.add(key);
+    }
+  });
+export type RestoreMapping = z.infer<typeof RestoreMappings>[number];
 const isTransfer = Schema.is(Schema.toEncoded(SessionTransfer.Data));
 
 // Validate the complete native transfer contract, not a partial transcript shape.

@@ -1,15 +1,23 @@
 import type { CommandDefinition } from '@opencode/plugin/promise/command';
 import type { DesktopHost } from './desktop-client.ts';
 import { fingerprint } from './fingerprint.ts';
-import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
+import { canRestore } from './restore-storage.ts';
+import {
+  ArchiveID,
+  SessionID,
+  type ArchiveStorage,
+  type RestoreMapping,
+} from './schema.ts';
 import { SessionArchive } from './service.ts';
 
 export function desktopCommands(
   connect: () => Promise<DesktopHost>,
   storage: ArchiveStorage,
-  projectID: string,
+  scope: { projectID: string; directory: string },
   signal: AbortSignal,
+  restoreMappings: RestoreMapping[] = [],
 ): CommandDefinition[] {
+  const projectID = scope.projectID;
   let running = false;
 
   function command(
@@ -105,7 +113,7 @@ export function desktopCommands(
       id = answer.archive;
     }
     const bundle = await storage.read(id);
-    if (bundle.projectID !== projectID)
+    if (!canRestore(bundle, scope, restoreMappings))
       throw new Error(
         'The archive belongs to another project. Nothing was restored.',
       );
@@ -113,6 +121,7 @@ export function desktopCommands(
     const result = await new SessionArchive(host.sessions, storage).restore(
       id,
       fingerprint(bundle),
+      restoreMappings,
     );
     try {
       await host.report(

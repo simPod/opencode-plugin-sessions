@@ -17,8 +17,9 @@ import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import type { SessionInfo } from '@opencode/client';
-import type { ArchiveBundle } from '../src/schema.ts';
+import type { ArchiveBundle, RestoreMapping } from '../src/schema.ts';
 import { fingerprint } from '../src/fingerprint.ts';
+import { restoreStorage } from '../src/restore-storage.ts';
 import { FileArchiveStorage } from '../src/storage.ts';
 
 async function fixture(t: TestContext) {
@@ -36,6 +37,7 @@ async function fixture(t: TestContext) {
 function bundle(
   projectID = 'project-a',
   id: string = randomUUID(),
+  directory = '/synthetic/project',
 ): ArchiveBundle {
   const info: SessionInfo = {
     id: 'ses_fixture',
@@ -44,7 +46,7 @@ function bundle(
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1700000000000, updated: 1700000000001 },
-    location: { directory: '/synthetic/project' },
+    location: { directory },
     metadata: { fixture: 'Unicode: č 🌱\nNUL: \u0000\nquotes: " and \\' },
   };
   return {
@@ -102,6 +104,283 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
   );
   assert.deepEqual(await readFile(saved.path), bytes);
   assert.deepEqual(await readdir(dirname(saved.path)), [`${saved.id}.json`]);
+
+  const current = new FileArchiveStorage({
+    storageDirectory,
+    projectID: 'project-new',
+    projectName: 'New project',
+  });
+  const view = restoreStorage(current, {
+    storageDirectory,
+    projectID: 'project-new',
+    directory: '/synthetic/new',
+    restoreMappings: [
+      {
+        from: { projectID: 'project-a', directory: '/synthetic/project' },
+        to: { projectID: 'project-new', directory: '/synthetic/new' },
+      },
+    ],
+  });
+  assert.deepEqual(await view.list(), await storage.list());
+  assert.deepEqual(await view.read(saved.id), original);
+  const newBundle = bundle('project-new', randomUUID(), '/synthetic/new');
+  const newSaved = await view.save(newBundle);
+  assert.notEqual(dirname(newSaved.path), dirname(saved.path));
+  assert.deepEqual(await current.read(newSaved.id), newBundle);
+  assert.deepEqual(await readFile(saved.path), bytes);
+  assert.equal((await stat(dirname(saved.path))).mode & 0o777, 0o700);
+  assert.equal((await stat(saved.path)).mode & 0o777, 0o600);
+});
+
+test('restore discovery admits only exact mapped roots and deduplicates shared Git folders', async (t) => {
+  const { storage, storageDirectory } = await fixture(t);
+  const first = await storage.save(bundle());
+  const second = await storage.save(
+    bundle('project-a', randomUUID(), '/synthetic/second'),
+  );
+  const unmapped = await storage.save(
+    bundle('project-a', randomUUID(), '/synthetic/unmapped'),
+  );
+  const current = new FileArchiveStorage({
+    storageDirectory,
+    projectID: 'project-new',
+    projectName: 'New project',
+  });
+  const scope = { projectID: 'project-new', directory: '/synthetic/new' };
+  const mappings: RestoreMapping[] = [
+    { from: { projectID: 'project-a', directory: '/synthetic/project' }, to: scope },
+    { from: { projectID: 'project-a', directory: '/synthetic/second' }, to: scope },
+    {
+      from: { projectID: 'project-a', directory: '/synthetic/unmapped' },
+      to: { ...scope, directory: '/synthetic/other-worktree' },
+    },
+  ];
+  const view = restoreStorage(current, {
+    storageDirectory,
+    ...scope,
+    restoreMappings: mappings,
+  });
+  assert.deepEqual(
+    new Set((await view.list()).map(({ id }) => id)),
+    new Set([first.id, second.id]),
+  );
+  assert.equal(
+    (await view.read(first.id)).sessions[0]?.info.location.directory,
+    '/synthetic/project',
+  );
+  assert.equal(
+    (await view.read(second.id)).sessions[0]?.info.location.directory,
+    '/synthetic/second',
+  );
+  await assert.rejects(view.read(unmapped.id), /Cannot read archive/);
+  const wrongScope = restoreStorage(current, {
+    storageDirectory,
+    projectID: 'project-new',
+    directory: '/synthetic/other',
+    restoreMappings: mappings,
+  });
+  assert.deepEqual(await wrongScope.list(), []);
+  await assert.rejects(wrongScope.read(first.id), /Cannot read archive/);
+  const wrongProject = restoreStorage(current, {
+    storageDirectory,
+    projectID: 'project-other',
+    directory: scope.directory,
+    restoreMappings: mappings,
+  });
+  assert.deepEqual(await wrongProject.list(), []);
+  await assert.rejects(wrongProject.read(first.id), /Cannot read archive/);
+
+  const currentBundle = bundle('project-new', unmapped.id, scope.directory);
+  await view.save(currentBundle);
+  assert.deepEqual(
+    new Set((await view.list()).map(({ id }) => id)),
+    new Set([first.id, second.id, unmapped.id]),
+  );
+  assert.deepEqual(await view.read(unmapped.id), currentBundle);
+
+  const own = restoreStorage(storage, {
+    storageDirectory,
+    projectID: 'project-a',
+    directory: '/synthetic/another-worktree',
+    restoreMappings: [
+      {
+        from: { projectID: 'project-a', directory: '/synthetic/project' },
+        to: { projectID: 'project-a', directory: '/synthetic/another-worktree' },
+      },
+    ],
+  });
+  assert.equal((await own.list()).length, 3);
+  assert.equal((await own.read(unmapped.id)).projectID, 'project-a');
+});
+
+test('global restore discovery keeps directories separate unless their exact pairs are mapped', async (t) => {
+  const { storageDirectory } = await fixture(t);
+  const createGlobal = (directory: string) =>
+    new FileArchiveStorage({
+      storageDirectory,
+      projectID: 'global',
+      projectName: 'Same name',
+      projectDirectory: directory,
+    });
+  const scope = { projectID: 'global', directory: '/non-git/current' };
+  const current = createGlobal(scope.directory);
+  const own = await current.save(bundle('global', randomUUID(), scope.directory));
+  const old = createGlobal('/non-git/old');
+  const oldSaved = await old.save(bundle('global', randomUUID(), '/non-git/old'));
+  const other = createGlobal('/non-git/other');
+  const otherSaved = await other.save(
+    bundle('global', randomUUID(), '/non-git/other'),
+  );
+  const unmapped = restoreStorage(current, {
+    storageDirectory,
+    ...scope,
+    restoreMappings: [],
+  });
+  assert.deepEqual((await unmapped.list()).map(({ id }) => id), [own.id]);
+  await assert.rejects(unmapped.read(oldSaved.id), /Cannot read archive/);
+  const view = restoreStorage(current, {
+    storageDirectory,
+    ...scope,
+    restoreMappings: [
+      { from: { projectID: 'global', directory: '/non-git/old' }, to: scope },
+      { from: { projectID: 'global', directory: '/non-git/other' }, to: scope },
+    ],
+  });
+  assert.deepEqual(
+    new Set((await view.list()).map(({ id }) => id)),
+    new Set([own.id, oldSaved.id, otherSaved.id]),
+  );
+  assert.equal(
+    (await view.read(oldSaved.id)).sessions[0]?.info.location.directory,
+    '/non-git/old',
+  );
+  assert.equal(
+    (await view.read(otherSaved.id)).sessions[0]?.info.location.directory,
+    '/non-git/other',
+  );
+});
+
+test('restore discovery refuses duplicate eligible IDs instead of choosing a store', async (t) => {
+  const { storage, storageDirectory } = await fixture(t);
+  const original = bundle();
+  await storage.save(original);
+  const current = new FileArchiveStorage({
+    storageDirectory,
+    projectID: 'project-new',
+    projectName: 'New project',
+  });
+  await current.save(bundle('project-new', original.id, '/synthetic/new'));
+  const view = restoreStorage(current, {
+    storageDirectory,
+    projectID: 'project-new',
+    directory: '/synthetic/new',
+    restoreMappings: [
+      {
+        from: { projectID: 'project-a', directory: '/synthetic/project' },
+        to: { projectID: 'project-new', directory: '/synthetic/new' },
+      },
+    ],
+  });
+  await assert.rejects(view.list(), /Cannot list archives/);
+  await assert.rejects(view.read(original.id), /Cannot read archive/);
+});
+
+test('direct restores and backup verification ignore unrelated corrupt archives', async (t) => {
+  for (const corruptLocation of ['primary', 'mapped source']) {
+    await t.test(corruptLocation, async (t) => {
+      const { storage, storageDirectory } = await fixture(t);
+      const source = new FileArchiveStorage({
+        storageDirectory,
+        projectID: 'project-old',
+        projectName: 'Old project',
+      });
+      const primaryBundle = bundle();
+      const sourceBundle = bundle('project-old', randomUUID(), '/synthetic/old');
+      await storage.save(primaryBundle);
+      await source.save(sourceBundle);
+      const corrupt =
+        corruptLocation === 'primary'
+          ? await storage.save(bundle())
+          : await source.save(bundle('project-old', randomUUID(), '/synthetic/old'));
+      await writeFile(corrupt.path, '{"private-transcript":"secret text",');
+      const view = restoreStorage(storage, {
+        storageDirectory,
+        projectID: 'project-a',
+        directory: '/synthetic/project',
+        restoreMappings: [
+          {
+            from: { projectID: 'project-old', directory: '/synthetic/old' },
+            to: { projectID: 'project-a', directory: '/synthetic/project' },
+          },
+        ],
+      });
+      for (const operation of [
+        () => view.list(),
+        () => view.read(corrupt.id),
+      ]) {
+        await assert.rejects(operation, (error: unknown) => {
+          assert(error instanceof Error);
+          assert.match(error.message, /Cannot (read|list) archive/);
+          assert(!error.message.includes('secret text'));
+          return true;
+        });
+      }
+      const newBundle = bundle();
+      const newlySaved = await view.save(newBundle);
+      assert.deepEqual(
+        await Promise.all([
+          view.read(primaryBundle.id),
+          view.read(sourceBundle.id),
+          view.read(newlySaved.id),
+        ]),
+        [primaryBundle, sourceBundle, newBundle],
+      );
+      if (corruptLocation === 'primary')
+        await source.save(bundle('project-old', corrupt.id, '/synthetic/old'));
+      else await view.save(bundle('project-a', corrupt.id));
+      await assert.rejects(view.read(corrupt.id), /Cannot read archive/);
+    });
+  }
+});
+
+test('read-only source lookup leaves missing folders absent and refuses writes', async (t) => {
+  const { directory, storageDirectory, storage } = await fixture(t);
+  const missingRoot = join(directory, 'missing');
+  for (const root of [missingRoot, storageDirectory]) {
+    if (root === storageDirectory) await mkdir(root, { mode: 0o700 });
+    const source = new FileArchiveStorage({
+      storageDirectory: root,
+      projectID: 'project-missing',
+      projectName: 'Missing source',
+      readOnly: true,
+    });
+    assert.deepEqual(await source.list(), []);
+    assert.equal(await source.find(randomUUID()), undefined);
+    await assert.rejects(source.read(randomUUID()), /Cannot read archive/);
+    await assert.rejects(
+      source.save(bundle('project-missing')),
+      /Cannot save archive/,
+    );
+  }
+  await assert.rejects(stat(missingRoot), { code: 'ENOENT' });
+  assert.deepEqual(await readdir(storageDirectory), []);
+  const saved = await storage.save(bundle());
+  const scope = { projectID: 'project-a', directory: '/synthetic/project' };
+  const view = restoreStorage(storage, {
+    storageDirectory,
+    ...scope,
+    restoreMappings: [
+      {
+        from: { projectID: 'project-missing', directory: '/synthetic/missing' },
+        to: scope,
+      },
+    ],
+  });
+  assert.deepEqual(await view.read(saved.id), await storage.read(saved.id));
+  assert.equal((await view.list()).length, 1);
+  assert.deepEqual(await readdir(storageDirectory), [
+    basename(dirname(saved.path)),
+  ]);
 });
 
 test('project identity survives renames and isolates projects with the same name', async (t) => {
@@ -159,6 +438,8 @@ test('project identity survives renames and isolates projects with the same name
   const suffix = basename(dirname(first.path)).slice('Sample-project'.length);
   await mkdir(join(storageDirectory, `duplicate${suffix}`), { mode: 0o700 });
   await assert.rejects(renamed.list(), /Cannot list archives/);
+  await assert.rejects(renamed.read(first.id), /Cannot read archive/);
+  await assert.rejects(renamed.find(randomUUID()), /Cannot read archive/);
 });
 
 test('corrupt JSON, checksum, and native transfer data fail visibly without disclosing content', async (t) => {
@@ -223,16 +504,47 @@ test('corrupt JSON, checksum, and native transfer data fail visibly without disc
 test('unsafe permissions, symlinks, and non-UUID paths cannot expose foreign files', async (t) => {
   const { directory, storageDirectory, storage } = await fixture(t);
   const saved = await storage.save(bundle());
+  const readers = [
+    storage,
+    new FileArchiveStorage({
+      storageDirectory,
+      projectID: 'project-a',
+      projectName: 'Read-only source',
+      readOnly: true,
+    }),
+  ];
+  const current = new FileArchiveStorage({
+    storageDirectory,
+    projectID: 'project-new',
+    projectName: 'New project',
+  });
+  const view = restoreStorage(current, {
+    storageDirectory,
+    projectID: 'project-new',
+    directory: '/synthetic/new',
+    restoreMappings: [
+      {
+        from: { projectID: 'project-a', directory: '/synthetic/project' },
+        to: { projectID: 'project-new', directory: '/synthetic/new' },
+      },
+    ],
+  });
+  const newSaved = await view.save(
+    bundle('project-new', randomUUID(), '/synthetic/new'),
+  );
   const foreign = join(directory, 'foreign.json');
   const foreignBytes = await readFile(saved.path);
   await writeFile(foreign, foreignBytes, { mode: 0o600 });
   for (const id of ['../foreign', foreign, `${saved.id}/../../foreign`]) {
-    await assert.rejects(storage.read(id), /Invalid archive ID/);
+    for (const reader of readers)
+      await assert.rejects(reader.read(id), /Invalid archive ID/);
   }
   await rm(saved.path);
   await symlink(foreign, saved.path);
-  await assert.rejects(storage.read(saved.id), /Cannot read archive/);
-  await assert.rejects(storage.list(), /Cannot list archives/);
+  for (const reader of readers) {
+    await assert.rejects(reader.read(saved.id), /Cannot read archive/);
+    await assert.rejects(reader.list(), /Cannot list archives/);
+  }
   await assert.rejects(
     storage.save(bundle('project-a', saved.id)),
     /Cannot save archive/,
@@ -240,11 +552,14 @@ test('unsafe permissions, symlinks, and non-UUID paths cannot expose foreign fil
   assert.deepEqual(await readFile(foreign), foreignBytes);
   await rm(saved.path);
   await writeFile(saved.path, foreignBytes, { mode: 0o644 });
-  await assert.rejects(storage.read(saved.id), /Cannot read archive/);
+  for (const reader of readers)
+    await assert.rejects(reader.read(saved.id), /Cannot read archive/);
   await chmod(saved.path, 0o600);
   for (const path of [dirname(saved.path), storageDirectory]) {
     await chmod(path, 0o755);
-    await assert.rejects(storage.list(), /Cannot list archives/);
+    for (const reader of readers)
+      await assert.rejects(reader.list(), /Cannot list archives/);
+    await assert.rejects(view.read(newSaved.id), /Cannot read archive/);
     assert.equal((await stat(path)).mode & 0o777, 0o755);
     await chmod(path, 0o700);
   }
@@ -254,10 +569,13 @@ test('unsafe permissions, symlinks, and non-UUID paths cannot expose foreign fil
     storageDirectory: linkedRoot,
     projectID: 'project-a',
     projectName: 'Sample project',
+    readOnly: true,
   });
   await assert.rejects(linked.read(saved.id), /Cannot read archive/);
   const projectPath = dirname(saved.path);
   await rm(projectPath, { recursive: true });
   await symlink(directory, projectPath);
-  await assert.rejects(storage.list(), /Cannot list archives/);
+  for (const reader of readers)
+    await assert.rejects(reader.list(), /Cannot list archives/);
+  await assert.rejects(view.read(newSaved.id), /Cannot read archive/);
 });

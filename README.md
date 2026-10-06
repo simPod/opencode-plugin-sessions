@@ -89,6 +89,42 @@ plugin loading. A CLI plugin installed separately against a remote server still
 needs the server plugin configured there for storage RPCs. This package is not
 published to npm; installation uses the built checkout.
 
+## Restore after a rename or removed worktree
+
+Optional server plugin `restoreMappings` explicitly relocate archived sessions.
+The default is `[]`: restore uses the original project and directory.
+
+```jsonc
+"options": {
+  "restoreMappings": [
+    {
+      "from": { "projectID": "old-project-id", "directory": "/absolute/old-worktree" },
+      "to": { "projectID": "current-project-id", "directory": "/absolute/current-worktree" }
+    }
+  ]
+}
+```
+
+Use actual OpenCode project IDs and absolute paths on the connected server. Each
+rule matches the exact original project ID and directory together. There are no
+prefix matches, automatic guesses, or mapping chains. Duplicate source pairs are
+rejected. A mapped destination must exist, be readable, and resolve to the
+specified destination project ID. Desktop and TUI read the same server rules.
+Configured mappings apply to subsequent `/session-restore` calls, with or
+without an archive ID; they do not affect archive export or deletion.
+
+Restore keeps session IDs, parent links, messages, and the original archive
+unchanged. Only the imported project ID and directory change, plus the existing
+removal of the native archive timestamp. The picker includes old root archives
+only when their exact original root pair maps to the current project and
+directory. Missing mapped-source folders are not created, archive files are not
+moved, and ambiguous duplicate archive UUIDs are refused.
+
+Paths inside messages, metadata, and permission rules are not rewritten. Review
+saved permissions before resuming a relocated session; rules for the old paths
+may no longer apply to the new directory. Workspace identity restoration is
+still unsupported. Remove a mapping when it should no longer apply.
+
 ## Storage
 
 `storageDirectory` accepts an absolute path or `~/...`. Without it, the plugin
@@ -137,10 +173,11 @@ damage, not malicious edits by someone who can write the directory.
 - Restore refuses existing IDs and missing external parents. Parents are
   imported before children at their original working directories. Before any
   import, every saved directory must pass a fresh server filesystem check and
-  resolve to its original project ID. Recreate removed worktrees or restore the
-  original project identity before restoring. This project lookup can be cached,
-  so the plugin also verifies each imported project ID, location, and transcript
-  and stops if the server changes them. It does not silently remap project IDs.
+  resolve to its original project ID, or an explicitly configured mapped project
+  ID. Recreate removed worktrees, restore the original project identity, or set
+  a restore mapping before restoring. This project lookup can be cached, so the
+  plugin also verifies each imported project ID, location, and transcript and
+  stops if the server changes them. It does not silently remap project IDs.
 - The root project's archive contains private transcripts from every descendant
   project. Project folders organize storage; they are not separate authorization
   boundaries. Use only a server and archive storage you trust for all these

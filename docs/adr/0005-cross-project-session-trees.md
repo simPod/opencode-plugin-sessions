@@ -4,7 +4,9 @@
 
 Accepted. Supersedes the descendant project refusals retained in
 [ADR 0003](0003-immediate-archive-and-restore.md). Implements the updated
-[session archive PRD](../session-archive.md).
+[session archive PRD](../session-archive.md). Original-location-only restoration
+is superseded by [ADR 0006](0006-explicit-restore-relocations.md) for explicit
+configured mappings.
 
 ## Context
 

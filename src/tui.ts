@@ -3,6 +3,7 @@ import { Plugin } from '@opencode/plugin/tui';
 import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
 import { Archives } from './rpc.ts';
+import { canRestore } from './restore-storage.ts';
 import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
 
@@ -40,11 +41,18 @@ export default Plugin.define({
 
     async function scoped(location: LocationRef) {
       const scope = await context.client.location.get({ location });
+      const restoreMappings = await rpc.restoreMappings({}, { location });
       const storage: ArchiveStorage = {
         list: () => rpc.list({}, { location }),
         read: async (id) => {
           const bundle = await rpc.read({ id }, { location });
-          if (bundle.projectID !== scope.project.id) {
+          if (
+            !canRestore(
+              bundle,
+              { projectID: scope.project.id, directory: location.directory },
+              restoreMappings,
+            )
+          ) {
             throw new Error(
               'The archive belongs to another project. Nothing was changed.',
             );
@@ -64,6 +72,7 @@ export default Plugin.define({
         storage,
         projectID: scope.project.id,
         service: new SessionArchive(gateway(context.client), storage),
+        restoreMappings,
       };
     }
 
@@ -126,7 +135,7 @@ export default Plugin.define({
       if (argument && !ArchiveID.safeParse(argument).success) {
         throw new Error('Use /session-restore [archiveUUID].');
       }
-      const { storage, service } = await scoped(location);
+      const { storage, service, restoreMappings } = await scoped(location);
       let id = argument;
       if (!id) {
         const archives = await storage.list();
@@ -151,7 +160,11 @@ export default Plugin.define({
       }
 
       const bundle = await storage.read(id);
-      const restored = await service.restore(id, fingerprint(bundle));
+      const restored = await service.restore(
+        id,
+        fingerprint(bundle),
+        restoreMappings,
+      );
       for (const sessionID of restored.sessionIDs)
         context.data.session.invalidate(sessionID);
       try {

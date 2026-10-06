@@ -8,9 +8,11 @@ import { fingerprint } from './fingerprint.ts';
 import type { SessionGateway } from './gateway.ts';
 import {
   Bundle,
+  RestoreMappings,
   SessionID,
   type ArchiveBundle,
   type ArchiveStorage,
+  type RestoreMapping,
 } from './schema.ts';
 
 export interface ArchivePreview {
@@ -190,6 +192,7 @@ export class SessionArchive {
   restore(
     id: string,
     expectedFingerprint?: string,
+    restoreMappings: RestoreMapping[] = [],
   ): Promise<{ rootSessionID: string; sessionIDs: string[] }> {
     return this.#exclusive(async () => {
       const bundle: ArchiveBundle = Bundle.parse(await this.#storage.read(id));
@@ -205,6 +208,27 @@ export class SessionArchive {
         assertSettled(transfer.messages);
         assertRestorable(transfer.info);
       }
+      const mappings = RestoreMappings.parse(restoreMappings);
+      const transfers = bundle.sessions.map((transfer) => {
+        const mapping = mappings.find(
+          ({ from }) =>
+            from.projectID === transfer.info.projectID &&
+            from.directory === transfer.info.location.directory,
+        );
+        return mapping
+          ? {
+              ...transfer,
+              info: {
+                ...transfer.info,
+                projectID: mapping.to.projectID,
+                location: {
+                  ...transfer.info.location,
+                  directory: mapping.to.directory,
+                },
+              },
+            }
+          : transfer;
+      });
       const existing = await this.#sessions.existing();
       if (bundle.sessions.some((session) => existing.has(session.info.id))) {
         throw new Error(
@@ -216,22 +240,22 @@ export class SessionArchive {
         throw new Error('Restore the archived session’s parent first.');
       // Native import derives project identity from the location, not info.projectID.
       // Check the entire family before importing its root, including foreign projects.
-      for (const transfer of bundle.sessions) {
+      for (const transfer of transfers) {
         const projectID = await this.#sessions
           .resolveProject(transfer.info.location.directory)
           .catch(() => {
             throw new Error(
-              `The original project location for ${transfer.info.id} is unavailable. Nothing was imported; the archive is retained. Restore its original project location before retrying.`,
+              `The restore location for ${transfer.info.id} is unavailable. Nothing was imported; the archive is retained. Restore the directory or configure an explicit restore mapping before retrying.`,
             );
           });
         if (projectID !== transfer.info.projectID)
           throw new Error(
-            `The saved location for ${transfer.info.id} now belongs to another project. Nothing was imported; the archive is retained. Restore its original project location before retrying.`,
+            `The restore location for ${transfer.info.id} belongs to another project. Nothing was imported; the archive is retained. Restore the project identity or configure an explicit restore mapping before retrying.`,
           );
       }
       let imported = 0;
       try {
-        for (const transfer of bundle.sessions) {
+        for (const transfer of transfers) {
           const { archived: _archived, ...time } = transfer.info.time;
           const restored = await this.#sessions.import({
             ...transfer,

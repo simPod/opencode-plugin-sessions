@@ -23,6 +23,7 @@ test('server plugin uses its home-directory default and honors explicit storage 
         id: 'project-default-test', canonical: '/synthetic/project',
       } },
       rpc: { register: async (_definition, handlers) => {
+        assert.deepEqual(await handlers.restoreMappings({}), JSON.parse(process.env.ARCHIVE_OPTIONS).restoreMappings ?? []);
         await handlers.list({});
         return { dispose: async () => {} };
       } },
@@ -49,6 +50,24 @@ test('server plugin uses its home-directory default and honors explicit storage 
       options: { storageDirectory: join(home, 'absolute-archives') },
       directory: join(home, 'absolute-archives'),
     },
+    {
+      name: 'server restore mappings are exposed through RPC',
+      options: {
+        restoreMappings: [
+          {
+            from: {
+              projectID: 'project-old',
+              directory: '/synthetic/old-project',
+            },
+            to: {
+              projectID: 'project-default-test',
+              directory: '/synthetic/project',
+            },
+          },
+        ],
+      },
+      directory: join(home, '.opencode-session-archives'),
+    },
   ];
   for (const row of cases)
     await t.test(row.name, async () => {
@@ -71,6 +90,40 @@ test('server plugin uses its home-directory default and honors explicit storage 
         await readdir(join(row.directory, folders[0] ?? '')),
         [],
       );
+    });
+  for (const invalid of ['relative directory', 'duplicate source'])
+    await t.test(`rejects ${invalid}`, async () => {
+      const mapping = {
+        from: { projectID: 'project-old', directory: '/synthetic/old-project' },
+        to: {
+          projectID: 'project-default-test',
+          directory: '/synthetic/project',
+        },
+      };
+      const restoreMappings = [mapping];
+      if (invalid === 'relative directory') mapping.to.directory = 'relative';
+      else restoreMappings.push(structuredClone(mapping));
+      const untouched = join(home, `invalid-${invalid.replaceAll(' ', '-')}`);
+      await assert.rejects(
+        execute(
+          process.execPath,
+          ['--experimental-strip-types', '--input-type=module', '-e', script],
+          {
+            env: {
+              ...process.env,
+              HOME: home,
+              ARCHIVE_OPTIONS: JSON.stringify({
+                storageDirectory: untouched,
+                restoreMappings,
+              }),
+            },
+          },
+        ),
+        invalid === 'relative directory'
+          ? /absolute server paths/
+          : /Duplicate restore mapping source/,
+      );
+      await assert.rejects(readdir(untouched), { code: 'ENOENT' });
     });
   await assert.rejects(readdir(join(home, 'xdg')), { code: 'ENOENT' });
 });
