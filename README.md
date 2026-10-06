@@ -47,7 +47,7 @@ implementation worktree:
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "/absolute/path/to/opencode-plugin-sessions",
+      "package": "/absolute/path/to/opencode-plugin-sessions/dist",
       "options": {
         "storageDirectory": "~/.opencode-session-archives",
       },
@@ -55,6 +55,10 @@ implementation worktree:
   ],
 }
 ```
+
+Use the built `dist` directory for a local installation: V2.0.24's local
+directory loader looks for `index.js`, `tui.js`, and `rpc.js` there rather than
+using the root package's exports.
 
 The package exports both a server plugin and `./tui` for automatic terminal
 plugin loading. A CLI plugin installed separately against a remote server still
