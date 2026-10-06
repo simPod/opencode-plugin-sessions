@@ -1,7 +1,7 @@
-diff --git a/node_modules/@opencode/ai/dist/route/media.d.ts b/node_modules/@opencode/ai/dist/route/media.d.ts
+diff --git a/dist/route/media.d.ts b/dist/route/media.d.ts
 index 435fbb1..004b11e 100644
---- a/node_modules/@opencode/ai/dist/route/media.d.ts
-+++ b/node_modules/@opencode/ai/dist/route/media.d.ts
+--- a/dist/route/media.d.ts
++++ b/dist/route/media.d.ts
 @@ -11,9 +11,9 @@ export interface MediaRequest {
      readonly model: {
          readonly id: string;
@@ -14,10 +14,10 @@ index 435fbb1..004b11e 100644
  }
  /** Deployment inputs every media model factory accepts; provider facades fill these from `configure(...)`. */
  export interface ModelInput {
-diff --git a/node_modules/@opencode/ai/dist/schema/events.d.ts b/node_modules/@opencode/ai/dist/schema/events.d.ts
+diff --git a/dist/schema/events.d.ts b/dist/schema/events.d.ts
 index ffe4fd3..5643b64 100644
---- a/node_modules/@opencode/ai/dist/schema/events.d.ts
-+++ b/node_modules/@opencode/ai/dist/schema/events.d.ts
+--- a/dist/schema/events.d.ts
++++ b/dist/schema/events.d.ts
 @@ -644,7 +644,7 @@ type WithID<Event extends {
      readonly id: ID | string;
  };

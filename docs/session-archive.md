@@ -56,6 +56,6 @@ Desktop coverage must also show command registration, cancellable archive
 selection, native question form compatibility, and refusal of a connection to a
 different server. Desktop commands require a managed service registration on
 their host; standalone and embedded servers fail closed. TUI remote connections
-remain supported. Publish the repository privately. Install the built checkout
-only after the user chooses to enable it. See
+remain supported. The repository is public; the package remains unpublished on
+npm. Install the built checkout only after the user chooses to enable it. See
 [ADR 0003](adr/0003-immediate-archive-and-restore.md).

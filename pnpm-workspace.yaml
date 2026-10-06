@@ -1,0 +1,2 @@
+patchedDependencies:
+  '@opencode/ai@2.0.24': patches/@opencode+ai+2.0.24.patch

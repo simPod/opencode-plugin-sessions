@@ -46,17 +46,19 @@ leaves the archived chat; TUI restoration opens it.
 
 ## Install
 
-Requires OpenCode V2.0.24, Git, and Node 26.4 or newer. Build the private
-checkout:
+Requires OpenCode V2.0.24, Git, Node 26.4 or newer, and pnpm 10.33.3. Build the
+local checkout:
 
 ```sh
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
 Builds use Node 24 type declarations because OpenTUI 0.5.14's `KeyHandler.emit`
 declaration is incompatible with Node 26's expanded `EventEmitter` types. The
-runtime and CI use Node 26; strict library checking remains enabled.
+runtime and CI use Node 26; strict library checking remains enabled. pnpm
+applies the tracked, version-specific OpenCode SDK declaration patch during
+installation; no postinstall script or hoisted transitive dependency is needed.
 
 Add the package to the relevant OpenCode configuration. Replace the paths with
 absolute paths on the server. Do not point configuration at a temporary

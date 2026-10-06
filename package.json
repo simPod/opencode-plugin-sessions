@@ -4,6 +4,7 @@
   "description": "OpenCode V2 session tools for private transcript archives and restoration.",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@10.33.3",
   "license": "MIT",
   "engines": {
     "node": ">=26.4"
@@ -15,13 +16,11 @@
   },
   "files": [
     "dist",
-    "scripts",
     "patches",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "postinstall": "node scripts/patch-sdk-types.mjs",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
