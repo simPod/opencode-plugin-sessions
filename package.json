@@ -1,0 +1,40 @@
+{
+  "name": "@simpod/opencode-session-archive",
+  "version": "0.1.0",
+  "description": "Archive OpenCode V2 session transcripts to private JSON files and restore them through the API.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./tui": "./dist/tui.js",
+    "./rpc": "./dist/rpc.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@opencode/schema": "2.0.24",
+    "effect": "4.0.0-rc.112",
+    "zod": "4.1.8"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.0.24 <3"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.24",
+    "@opencode/client": "2.0.24",
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.3"
+  }
+}
