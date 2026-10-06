@@ -115,7 +115,7 @@ export default Plugin.define({
       });
     }
 
-    async function unarchive(input?: string): Promise<void> {
+    async function restore(input?: string): Promise<void> {
       const route = context.ui.router.current();
       const location =
         route.type === 'session'
@@ -124,7 +124,7 @@ export default Plugin.define({
           : (context.location ?? context.data.location.default());
       const argument = input?.trim();
       if (argument && !ArchiveID.safeParse(argument).success) {
-        throw new Error('Use /session-unarchive [archiveUUID].');
+        throw new Error('Use /session-restore [archiveUUID].');
       }
       const { storage, service } = await scoped(location);
       let id = argument;
@@ -191,28 +191,14 @@ export default Plugin.define({
           run: (input) => operate(() => archive(input)),
         },
         {
-          id: 'simpod.session-archive.unarchive',
+          id: 'simpod.session-archive.restore',
           title: 'Restore session archive',
           description:
             'Restore an archive UUID, or select an archive in the current project',
           group: 'Session archives',
           palette: true,
-          slash: { name: 'session-unarchive', arguments: true },
-          run: (input) => operate(() => unarchive(input)),
-        },
-        {
-          id: 'simpod.session-archive.list',
-          title: 'List session archives',
-          description: 'List project archives and select one to restore',
-          group: 'Session archives',
-          palette: true,
-          slash: { name: 'session-archives', arguments: true },
-          run: (input) =>
-            operate(async () => {
-              if (input?.trim())
-                throw new Error('Use /session-archives without arguments.');
-              await unarchive();
-            }),
+          slash: { name: 'session-restore', arguments: true },
+          run: (input) => operate(() => restore(input)),
         },
       ],
     }));

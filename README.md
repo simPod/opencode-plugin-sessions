@@ -17,10 +17,12 @@ command-palette entries. It does not submit prompts to a model:
 
 - `/session-archive [session-id]`: save and verify the current session, or the
   supplied ID, and its descendants, then delete them without confirmation.
-- `/session-unarchive [archive-id]`: restore a saved archive, or select one from
-  the current project's archive list.
-- `/session-archives`: browse the current project's archives and select one to
-  restore immediately.
+- `/session-restore [archive-id]`: restore the supplied archive ID. Without an
+  ID, browse the current project's archives and select one to restore
+  immediately.
+
+`/session-restore` replaces `/session-unarchive` and `/session-archives`. The
+old command names are not aliases. Existing archive files and IDs are unchanged.
 
 Archive and restore run without confirmation in both desktop and TUI. Selecting
 an archive restores it immediately; cancelling the archive picker makes no

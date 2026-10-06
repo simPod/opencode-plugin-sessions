@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 
-test('TUI archive and selected restore run without confirmation dialogs', async () => {
+test('TUI registers only archive and restore, and restores by selection or ID without confirmation', async () => {
   // Drive the real plugin registration with native-client responses and a
   // stateful in-memory session/store. Never change a real OpenCode session.
   const script = `
@@ -54,13 +54,22 @@ test('TUI archive and selected restore run without confirmation dialogs', async 
         },
       },
     });
+    assert.deepEqual(commands.map(command => command.slash.name), ['session-archive', 'session-restore']);
+    assert(commands.every(command => !command.slash.aliases?.length));
     const archive = commands.find(command => command.slash.name === 'session-archive');
     await archive.run();
     assert.equal(state.size, 0);
     assert.deepEqual(bundle.sessions, [original]);
     assert.equal(route.type, 'home');
-    const restore = commands.find(command => command.slash.name === 'session-unarchive');
+    const restore = commands.find(command => command.slash.name === 'session-restore');
     await restore.run();
+    assert.equal(selections, 1);
+    assert.equal(route.sessionID, 'ses_test');
+    assert.deepEqual(state.get('ses_test').messages, original.messages);
+    assert.equal(toasts.at(-1).variant, 'success');
+    await archive.run();
+    assert.equal(state.size, 0);
+    await restore.run(bundle.id);
     assert.equal(selections, 1);
     assert.equal(route.sessionID, 'ses_test');
     assert.deepEqual(state.get('ses_test').messages, original.messages);

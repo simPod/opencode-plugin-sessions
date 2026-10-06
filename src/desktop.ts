@@ -65,7 +65,7 @@ export function desktopCommands(
   ): Promise<void> {
     let id = argument;
     if (id && !ArchiveID.safeParse(id).success)
-      throw new Error('Use /session-unarchive [archiveUUID].');
+      throw new Error('Use /session-restore [archiveUUID].');
     if (!id) {
       const archives = await storage.list();
       if (!archives.length) {
@@ -161,18 +161,9 @@ export function desktopCommands(
       },
     ),
     command(
-      'session-unarchive',
-      'Restore a session archive without overwriting existing IDs',
+      'session-restore',
+      'Restore an archive ID, or select an archive from this project',
       restore,
-    ),
-    command(
-      'session-archives',
-      'Browse this project’s archives and select one to restore',
-      async (host, sessionID, argument) => {
-        if (argument)
-          throw new Error('Use /session-archives without arguments.');
-        await restore(host, sessionID, '');
-      },
     ),
   ];
 }

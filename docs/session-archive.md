@@ -7,9 +7,11 @@ their transcripts available for later restoration.
 
 ## Behavior
 
-Provide desktop and TUI slash commands to archive a session family, browse
-archives, and restore a family. Archive means verified JSON export followed by
-recursive native deletion. Unarchive means native import with original IDs,
+Provide two desktop and TUI slash commands: `/session-archive [session-id]` and
+`/session-restore [archive-id]`. Without an archive ID, restore opens the
+current project's archive picker. Remove `/session-unarchive` and
+`/session-archives` without aliases. Archive means verified JSON export followed
+by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
 
 Desktop commands must appear in the slash-command list. Use native question
@@ -51,11 +53,12 @@ during development or archive real user sessions as a validation step.
 
 Tests must show private, verified, no-overwrite storage; project isolation;
 complete descendant handling; safe refusal; and parent-first restoration.
-Desktop and TUI coverage must show archive and restore without confirmation.
-Desktop coverage must also show command registration, cancellable archive
-selection, native question form compatibility, and refusal of a connection to a
-different server. Desktop commands require a managed service registration on
-their host; standalone and embedded servers fail closed. TUI remote connections
-remain supported. The repository is public; the package remains unpublished on
-npm. Install the built checkout only after the user chooses to enable it. See
-[ADR 0003](adr/0003-immediate-archive-and-restore.md).
+Desktop and TUI coverage must show only the two command names, archive and
+restore without confirmation, and restoration by supplied ID or picker
+selection. Desktop coverage must also show command registration, cancellable
+archive selection, native question form compatibility, and refusal of a
+connection to a different server. Desktop commands require a managed service
+registration on their host; standalone and embedded servers fail closed. TUI
+remote connections remain supported. The repository is public; the package
+remains unpublished on npm. Install the built checkout only after the user
+chooses to enable it. See [ADR 0003](adr/0003-immediate-archive-and-restore.md).

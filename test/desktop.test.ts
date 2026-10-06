@@ -196,11 +196,21 @@ test('desktop can archive the open session without trying to report to the delet
   assert.deepEqual(f.questions, []);
 });
 
-test('desktop archive browser restores immediately after selection and retains its archive', async () => {
+test('desktop restore with an ID imports immediately without a picker and retains its archive', async () => {
+  const f = fixture();
+  f.archived();
+  await f.run('session-restore', archiveID);
+  assert(f.state.has('ses_archived'));
+  assert(f.bundles.has(archiveID));
+  assert.deepEqual(f.questions, []);
+  assert.deepEqual(f.events, ['import']);
+});
+
+test('desktop restore without an ID restores immediately after selection and retains its archive', async () => {
   const f = fixture();
   f.archived();
   f.answers.push({ archive: archiveID });
-  await f.run('session-archives');
+  await f.run('session-restore');
   assert(f.state.has('ses_archived'));
   assert(f.bundles.has(archiveID));
   assert.equal(f.questions.length, 1);
@@ -215,17 +225,14 @@ test('desktop restore picker cancellation, invalid selection, and project mismat
       f.archived();
       f.answers.push(...answers);
       if (answers[0]?.archive && answers[0].archive !== archiveID)
-        await assert.rejects(f.run('session-archives'), /Select an archive/);
-      else await f.run('session-archives');
+        await assert.rejects(f.run('session-restore'), /Select an archive/);
+      else await f.run('session-restore');
       assert.deepEqual(f.events, []);
     });
   }
   const f = fixture();
   f.archived('project-b');
-  await assert.rejects(
-    f.run('session-unarchive', archiveID),
-    /another project/,
-  );
+  await assert.rejects(f.run('session-restore', archiveID), /another project/);
   assert.deepEqual(f.events, []);
 });
 
@@ -239,7 +246,7 @@ test('desktop refuses queued commands and stops before writes when the plugin un
   f.archived();
   f.answers.push({ archive: archiveID });
   f.onAnswer(() => f.abort.abort());
-  await assert.rejects(f.run('session-archives'), {
+  await assert.rejects(f.run('session-restore'), {
     name: 'AbortError',
   });
   assert.deepEqual(f.events, []);
@@ -247,7 +254,7 @@ test('desktop refuses queued commands and stops before writes when the plugin un
 
 test('desktop shows an empty archive list without starting restoration', async () => {
   const f = fixture();
-  await f.run('session-archives');
+  await f.run('session-restore');
   assert.match(f.reports[0] ?? '', /No session archives/);
   assert.deepEqual(f.events, []);
 });
@@ -262,10 +269,10 @@ test('desktop refuses a second operation while another command waits for archive
     }),
   );
   f.archived();
-  const pending = f.run('session-archives');
+  const pending = f.run('session-restore');
   await entered;
   try {
-    await assert.rejects(f.run('session-archives'), /operation is in progress/);
+    await assert.rejects(f.run('session-restore'), /operation is in progress/);
   } finally {
     release();
     await pending;
@@ -278,7 +285,7 @@ test('desktop result failure states that restoration completed and must not be r
   f.archived();
   f.failReport();
   await assert.rejects(
-    f.run('session-unarchive', archiveID),
+    f.run('session-restore', archiveID),
     /was restored.*do not restore it again/,
   );
   assert(f.state.has('ses_archived'));
