@@ -177,83 +177,39 @@ function fixture() {
   };
 }
 
-test('desktop archive requires the exact affirmative answer and refuses changed previews', async (t) => {
-  for (const answer of [
-    undefined,
-    { exclusive: 'cancel' },
-    { exclusive: 'yes' },
-    { exclusive: true },
-  ]) {
-    await t.test(`decline ${JSON.stringify(answer)}`, async () => {
-      const f = fixture();
-      f.answers.push(answer);
-      await f.run('session-archive', 'ses_target');
-      assert.deepEqual(f.events, []);
-      assert(f.state.has('ses_target'));
-    });
-  }
+test('desktop archive verifies storage and deletes immediately without a confirmation form', async () => {
   const f = fixture();
-  f.answers.push({ exclusive: 'archive' });
-  f.onAnswer(() => {
-    const item = f.state.get('ses_target');
-    assert(item);
-    item.info.title = 'Changed';
-  });
-  await assert.rejects(
-    f.run('session-archive', 'ses_target'),
-    /changed after confirmation/,
-  );
-  assert.deepEqual(f.events, []);
-});
-
-test('desktop archive stores and deletes only after a visible scoped confirmation, without model work', async () => {
-  const f = fixture();
-  f.answers.push({ exclusive: 'archive' });
   await f.run('session-archive', 'ses_target');
   assert.deepEqual(f.events, ['save', 'remove']);
   assert(!f.state.has('ses_target'));
   assert(f.state.has('ses_owner'));
-  assert.equal(f.questions[0]?.sessionID, 'ses_owner');
-  const field = f.questions[0]?.fields[0];
-  assert(field);
-  assert.equal(field.type, 'string');
-  assert.match(field.description ?? '', /Title ses_target/);
-  assert.match(field.description ?? '', /exclusive|Other clients/);
+  assert.deepEqual(f.questions, []);
   assert.match(f.reports[0] ?? '', /Archive:/);
 });
 
 test('desktop can archive the open session without trying to report to the deleted tree', async () => {
   const f = fixture();
-  f.answers.push({ exclusive: 'archive' });
   await f.run('session-archive');
   assert(!f.state.has('ses_owner'));
   assert.deepEqual(f.events, ['save', 'remove']);
   assert.deepEqual(f.reports, []);
-  assert.match(
-    f.questions[0]?.fields[0].description ?? '',
-    /removes the open session/,
-  );
+  assert.deepEqual(f.questions, []);
 });
 
-test('desktop archive browser selects and confirms restoration and retains its archive', async () => {
+test('desktop archive browser restores immediately after selection and retains its archive', async () => {
   const f = fixture();
   f.archived();
-  f.answers.push({ archive: archiveID }, { exclusive: 'restore' });
+  f.answers.push({ archive: archiveID });
   await f.run('session-archives');
   assert(f.state.has('ses_archived'));
   assert(f.bundles.has(archiveID));
-  assert.equal(f.questions.length, 2);
+  assert.equal(f.questions.length, 1);
   assert.deepEqual(f.events, ['import']);
   assert.match(f.reports[0] ?? '', /Open ses_archived/);
 });
 
-test('desktop restore cancellation, invalid selection, and project mismatch never import', async (t) => {
-  for (const answers of [
-    [undefined],
-    [{ archive: randomUUID() }],
-    [{ archive: archiveID }, { exclusive: 'cancel' }],
-    [{ archive: archiveID }, { exclusive: 'yes' }],
-  ]) {
+test('desktop restore picker cancellation, invalid selection, and project mismatch never import', async (t) => {
+  for (const answers of [[undefined], [{ archive: randomUUID() }]]) {
     await t.test(JSON.stringify(answers), async () => {
       const f = fixture();
       f.archived();
@@ -273,16 +229,17 @@ test('desktop restore cancellation, invalid selection, and project mismatch neve
   assert.deepEqual(f.events, []);
 });
 
-test('desktop refuses queued commands and stops before writes when the plugin unloads during confirmation', async () => {
+test('desktop refuses queued commands and stops before writes when the plugin unloads during selection', async () => {
   const f = fixture();
   await assert.rejects(
     f.run('session-archive', '', 'queue'),
     /cannot be queued/,
   );
   assert.deepEqual(f.questions, []);
-  f.answers.push({ exclusive: 'archive' });
+  f.archived();
+  f.answers.push({ archive: archiveID });
   f.onAnswer(() => f.abort.abort());
-  await assert.rejects(f.run('session-archive', 'ses_target'), {
+  await assert.rejects(f.run('session-archives'), {
     name: 'AbortError',
   });
   assert.deepEqual(f.events, []);
@@ -295,7 +252,7 @@ test('desktop shows an empty archive list without starting restoration', async (
   assert.deepEqual(f.events, []);
 });
 
-test('desktop refuses a second operation while another command waits for confirmation', async () => {
+test('desktop refuses a second operation while another command waits for archive selection', async () => {
   const f = fixture();
   const entered = new Promise<void>((resolve) => f.onAnswer(resolve));
   let release!: () => void;
@@ -304,8 +261,8 @@ test('desktop refuses a second operation while another command waits for confirm
       release = resolve;
     }),
   );
-  f.answers.push({ exclusive: 'cancel' });
-  const pending = f.run('session-archive', 'ses_target');
+  f.archived();
+  const pending = f.run('session-archives');
   await entered;
   try {
     await assert.rejects(f.run('session-archives'), /operation is in progress/);
@@ -320,11 +277,11 @@ test('desktop result failure states that restoration completed and must not be r
   const f = fixture();
   f.archived();
   f.failReport();
-  f.answers.push({ exclusive: 'restore' });
   await assert.rejects(
     f.run('session-unarchive', archiveID),
     /was restored.*do not restore it again/,
   );
   assert(f.state.has('ses_archived'));
   assert(f.bundles.has(archiveID));
+  assert.deepEqual(f.questions, []);
 });

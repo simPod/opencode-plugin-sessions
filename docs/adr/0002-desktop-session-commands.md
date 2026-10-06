@@ -6,7 +6,8 @@ Accepted. Supersedes the TUI-only interaction and server-storage-only parts of
 [ADR 0001](0001-file-backed-transcript-archives.md). Implements the desktop
 requirements in the [session archive PRD](../session-archive.md). Archive
 format, storage, transfer safeguards, and the accepted non-atomic workflow are
-unchanged.
+unchanged. The confirmation requirements are superseded by
+[ADR 0003](0003-immediate-archive-and-restore.md).
 
 ## Context
 

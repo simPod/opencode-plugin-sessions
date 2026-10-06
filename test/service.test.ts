@@ -239,7 +239,7 @@ test('archives the complete family before native recursive deletion and restores
     assert.deepEqual(new Set(f.sessions.state.keys()), new Set(familyIDs));
   };
 
-  const saved = await f.service.archive(preview, true);
+  const saved = await f.service.archive(preview);
   assert.deepEqual(f.events.slice(0, 3), ['save', 'read', 'remove:ses_root']);
   assert.deepEqual(f.sessions.removes, ['ses_root']);
   assert.equal(f.sessions.state.size, 0);
@@ -259,18 +259,6 @@ test('archives the complete family before native recursive deletion and restores
     assert.deepEqual(actual, { ...expected, info: { ...expected.info, time } });
   }
   assert.deepEqual(onlyBundle(f.storage).sessions, original);
-});
-
-test('without affirmative exclusive-use confirmation, archive neither writes storage nor deletes sessions', async () => {
-  const f = fixture();
-  const preview = await f.service.preview('ses_root');
-  await assert.rejects(
-    f.service.archive(preview, false),
-    /exclusive-use confirmation/,
-  );
-  assert.deepEqual(f.events, []);
-  assert.equal(f.storage.bundles.size, 0);
-  assertNoDelete(f);
 });
 
 const unsettled: Array<{ name: string; message: SessionMessageInfo }> = [
@@ -383,13 +371,13 @@ test('active, queued, unfinished, and export-omitted descendant work prevents ar
       const f = fixture();
       const preview = await f.service.preview('ses_root');
       row.change(f);
-      await assert.rejects(f.service.archive(preview, true), row.error);
+      await assert.rejects(f.service.archive(preview), row.error);
       assert.equal(f.storage.bundles.size, 0);
       assertNoDelete(f);
     });
 });
 
-test('a title, transcript, or new descendant change invalidates confirmation before or after backup save', async (t) => {
+test('a title, transcript, or new descendant change invalidates the snapshot before or after backup save', async (t) => {
   const changes: Array<{ name: string; change: (f: Fixture) => void }> = [
     {
       name: 'title',
@@ -400,14 +388,12 @@ test('a title, transcript, or new descendant change invalidates confirmation bef
     {
       name: 'transcript',
       change: (f) => {
-        f.sessions
-          .item('ses_grandchild')
-          .messages.push({
-            id: 'msg_new',
-            type: 'system',
-            time: { created: 1700000000003 },
-            text: 'New raw message',
-          });
+        f.sessions.item('ses_grandchild').messages.push({
+          id: 'msg_new',
+          type: 'system',
+          time: { created: 1700000000003 },
+          text: 'New raw message',
+        });
       },
     },
     {
@@ -428,7 +414,7 @@ test('a title, transcript, or new descendant change invalidates confirmation bef
         if (timing === 'after save') f.storage.afterSave = () => row.change(f);
         else row.change(f);
         await assert.rejects(
-          f.service.archive(preview, true),
+          f.service.archive(preview),
           /session family changed/,
         );
         assert.deepEqual(f.sessions.removes, []);
@@ -459,7 +445,7 @@ test('save failure, unreadable backup, and corrupt read-back prevent native dele
       const preview = await f.service.preview('ses_root');
       f.storage[fault] = true;
       await assert.rejects(
-        f.service.archive(preview, true),
+        f.service.archive(preview),
         fault === 'saveFailure'
           ? /Disk full/
           : fault === 'readFailure'
@@ -490,7 +476,7 @@ test('native recursive deletion failure and incomplete deletion retain backup wi
       const f = fixture();
       const preview = await f.service.preview('ses_root');
       f.sessions.deletion = row.mode;
-      await assert.rejects(f.service.archive(preview, true), row.error);
+      await assert.rejects(f.service.archive(preview), row.error);
       assert.deepEqual(
         new Set(f.sessions.state.keys()),
         new Set(row.remaining),
@@ -512,7 +498,6 @@ test('restore checks every ID conflict and missing external parent before import
         f.sessions.item('ses_root').info.parentID = 'ses_external';
       const saved = await f.service.archive(
         await f.service.preview('ses_root'),
-        true,
       );
       if (blocker === 'descendant ID conflict')
         f.sessions.state.set('ses_grandchild', transfer('ses_grandchild'));
@@ -532,10 +517,7 @@ test('restore checks every ID conflict and missing external parent before import
 
 test('partial native import failure keeps verified restored sessions and the archive for manual recovery', async () => {
   const f = fixture();
-  const saved = await f.service.archive(
-    await f.service.preview('ses_root'),
-    true,
-  );
+  const saved = await f.service.archive(await f.service.preview('ses_root'));
   f.sessions.importFailureID = 'ses_grandchild';
   await assert.rejects(
     f.service.restore(saved.id),

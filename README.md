@@ -5,8 +5,8 @@ deletes the live sessions. Restoring an archive imports the original session IDs
 and messages.
 
 **Archive deletion is not atomic.** OpenCode V2 has no public session lock or
-compare-and-delete operation. Before confirming an archive, stop other clients
-and automations from changing that session or its children. A write in the final
+compare-and-delete operation. Before running an archive, stop other clients and
+automations from changing that session or its children. A write in the final
 check-to-delete gap can be lost. Do not use this plugin when you need a lossless
 backup of an actively shared session.
 
@@ -15,19 +15,20 @@ backup of an actively shared session.
 The plugin adds real desktop slash commands, plus TUI slash commands and
 command-palette entries. It does not submit prompts to a model:
 
-- `/session-archive [session-id]`: preview the current session, or the supplied
-  ID, and its descendants. Confirm exclusive use before saving and deleting.
+- `/session-archive [session-id]`: save and verify the current session, or the
+  supplied ID, and its descendants, then delete them without confirmation.
 - `/session-unarchive [archive-id]`: restore a saved archive, or select one from
   the current project's archive list.
 - `/session-archives`: browse the current project's archives and select one to
-  restore after confirmation.
+  restore immediately.
 
-Desktop commands use native question panels for selection, preview, and
-confirmation. Choose the explicit exclusive-use option to proceed; any other
-answer or cancellation makes no changes. Commands run immediately and cannot be
-queued. Result panels require acknowledgement. When archiving the open session,
-open another session from the sidebar afterward. Restore returns the sessions to
-the list; it does not automatically open them in desktop.
+Archive and restore run without confirmation in both desktop and TUI. Selecting
+an archive restores it immediately; cancelling the archive picker makes no
+changes. Desktop commands use native question panels for archive selection and
+results. Commands run immediately and cannot be queued. Result panels require
+acknowledgement, not approval of the completed operation. When archiving the
+open session, open another session from the sidebar afterward. Restore returns
+the sessions to the list; it does not automatically open them in desktop.
 
 Desktop commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its

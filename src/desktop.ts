@@ -4,9 +4,6 @@ import { fingerprint } from './fingerprint.ts';
 import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
 
-const exclusiveUse =
-  'Other clients and automations must not write to this session tree during this operation. The APIs provide no lock; a concurrent write can be lost.';
-
 export function desktopCommands(
   connect: () => Promise<DesktopHost>,
   storage: ArchiveStorage,
@@ -112,34 +109,6 @@ export function desktopCommands(
       throw new Error(
         'The archive belongs to another project. Nothing was restored.',
       );
-    const root = bundle.sessions[0];
-    if (!root)
-      throw new Error(
-        'The archive contains no root session. Nothing was restored.',
-      );
-    const answer = await host.ask(sessionID, 'Restore session tree?', [
-      {
-        key: 'exclusive',
-        type: 'string',
-        title: 'Restore session tree?',
-        custom: true,
-        required: true,
-        options: [
-          { value: 'restore', label: 'I have exclusive use; restore' },
-          { value: 'cancel', label: 'Cancel' },
-        ],
-        description: [
-          `Title: ${root.info.title ?? bundle.rootSessionID}`,
-          `Root: ${bundle.rootSessionID}`,
-          `Sessions: ${bundle.sessions.length}`,
-          `Archive: ${bundle.id}`,
-          `Original working directory: ${root.info.location.directory}`,
-          'Restore original IDs and transcripts. Existing IDs are not overwritten. The archive is retained. Original working directories must remain available.',
-          exclusiveUse,
-        ].join('\n'),
-      },
-    ]);
-    if (answer?.exclusive !== 'restore') return;
     signal.throwIfAborted();
     const result = await new SessionArchive(host.sessions, storage).restore(
       id,
@@ -161,7 +130,7 @@ export function desktopCommands(
   return [
     command(
       'session-archive',
-      'Archive a session tree after preview and confirmation',
+      'Save and verify a session tree, then remove it from OpenCode',
       async (host, sessionID, argument) => {
         const target = argument || sessionID;
         if (!SessionID.safeParse(target).success)
@@ -172,36 +141,8 @@ export function desktopCommands(
           throw new Error(
             'The session belongs to another project. Nothing was deleted.',
           );
-        const session = await host.sessions.get(target);
-        const answer = await host.ask(sessionID, 'Archive session tree?', [
-          {
-            key: 'exclusive',
-            type: 'string',
-            title: 'Archive session tree?',
-            custom: true,
-            required: true,
-            options: [
-              { value: 'archive', label: 'I have exclusive use; archive' },
-              { value: 'cancel', label: 'Cancel' },
-            ],
-            description: [
-              `Title: ${preview.title}`,
-              `Root: ${target}`,
-              `Sessions: ${preview.sessionIDs.length} (selected session and all descendants)`,
-              `Working directory: ${session.location.directory}`,
-              'Save and verify a private archive, then recursively remove this session tree from OpenCode.',
-              exclusiveUse,
-              ...(preview.sessionIDs.includes(sessionID)
-                ? [
-                    'This also removes the open session. Afterward, open another session from the sidebar.',
-                  ]
-                : []),
-            ].join('\n'),
-          },
-        ]);
-        if (answer?.exclusive !== 'archive') return;
         signal.throwIfAborted();
-        const saved = await service.archive(preview, true);
+        const saved = await service.archive(preview);
         // Native deletion removes cached data, but cannot navigate the desktop.
         // Never attach a result to a deleted session.
         if (!preview.sessionIDs.includes(sessionID)) {
@@ -221,7 +162,7 @@ export function desktopCommands(
     ),
     command(
       'session-unarchive',
-      'Restore a session archive after confirmation',
+      'Restore a session archive without overwriting existing IDs',
       restore,
     ),
     command(

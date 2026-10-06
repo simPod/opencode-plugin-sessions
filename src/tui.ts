@@ -10,7 +10,7 @@ export default Plugin.define({
   id: 'simpod-sessions-tui',
   setup(context) {
     const rpc = context.client.rpc(Archives);
-    // Include preview and confirmation in the guard. Never queue destructive UI actions.
+    // Include archive selection in the guard. Never queue destructive UI actions.
     let running = false;
 
     async function operate(run: () => Promise<void>): Promise<void> {
@@ -87,27 +87,11 @@ export default Plugin.define({
           'The session location does not match its project. Nothing was deleted.',
         );
       }
-      const confirmed = await context.ui.dialog.confirm({
-        title: 'Archive session tree?',
-        message: [
-          `Title: ${preview.title}`,
-          `Root: ${preview.rootSessionID}`,
-          `Sessions: ${preview.sessionIDs.length} (selected session and all descendants)`,
-          `Working directory: ${context.ui.format.path(session.location.directory)}`,
-          '',
-          'Save and verify a private archive, then recursively remove this session tree from OpenCode.',
-          'The APIs provide no lock. Other clients and automations must not write to this tree during the operation.',
-          'Continue only if you have exclusive use of the entire session tree.',
-        ].join('\n'),
-        label: { confirm: 'I have exclusive use; archive', cancel: 'Cancel' },
-      });
-      if (confirmed !== true) return;
-
       const before = context.ui.router.current();
       const viewingTree =
         before.type === 'session' &&
         preview.sessionIDs.includes(before.sessionID);
-      const saved = await service.archive(preview, true);
+      const saved = await service.archive(preview);
       // Native session.deleted events remove cached sessions and may already close tabs.
       // Navigate before our tab cleanup so it cannot focus another deleted tree member.
       const current = context.ui.router.current();
@@ -167,30 +151,6 @@ export default Plugin.define({
       }
 
       const bundle = await storage.read(id);
-      const root = bundle.sessions[0];
-      if (!root)
-        throw new Error(
-          'The archive contains no root session. Nothing was restored.',
-        );
-      const confirmed = await context.ui.dialog.confirm({
-        title: 'Restore session tree?',
-        message: [
-          `Title: ${root.info.title ?? bundle.rootSessionID}`,
-          `Root: ${bundle.rootSessionID}`,
-          `Sessions: ${bundle.sessions.length}`,
-          `Archived: ${new Date(bundle.createdAt).toLocaleString()}`,
-          `Archive: ${bundle.id}`,
-          `Original working directory: ${context.ui.format.path(root.info.location.directory)}`,
-          '',
-          'Restore the original session IDs and transcripts. The archive file will be retained.',
-          'Existing session IDs are not overwritten. The original working directories must remain available on the connected server.',
-          'The APIs provide no lock. Other clients and automations must not write to this tree during the operation.',
-          'Continue only if you have exclusive use of the entire session tree.',
-        ].join('\n'),
-        label: { confirm: 'I have exclusive use; restore', cancel: 'Cancel' },
-      });
-      if (confirmed !== true) return;
-
       const restored = await service.restore(id, fingerprint(bundle));
       for (const sessionID of restored.sessionIDs)
         context.data.session.invalidate(sessionID);
@@ -243,8 +203,7 @@ export default Plugin.define({
         {
           id: 'simpod.session-archive.list',
           title: 'List session archives',
-          description:
-            'List project archives and select one to confirm restoration',
+          description: 'List project archives and select one to restore',
           group: 'Session archives',
           palette: true,
           slash: { name: 'session-archives', arguments: true },

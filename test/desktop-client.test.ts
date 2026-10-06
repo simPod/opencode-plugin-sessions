@@ -58,7 +58,10 @@ test(
         response.end(
           JSON.stringify({
             data: {
-              state: { status: 'answered', answer: { exclusive: 'archive' } },
+              state: {
+                status: 'answered',
+                answer: { archive: 'synthetic-archive' },
+              },
             },
           }),
         );
@@ -107,16 +110,16 @@ test(
       instanceID,
       new AbortController().signal,
     );
-    const answer = await host.ask('ses_owner', 'Archive session tree?', [
+    const answer = await host.ask('ses_owner', 'Select an archive', [
       {
-        key: 'exclusive',
+        key: 'archive',
         type: 'string',
         required: true,
         custom: true,
-        options: [{ value: 'archive', label: 'I have exclusive use; archive' }],
+        options: [{ value: 'synthetic-archive', label: 'Archived session' }],
       },
     ]);
-    assert.deepEqual(answer, { exclusive: 'archive' });
+    assert.deepEqual(answer, { archive: 'synthetic-archive' });
     await host.report(
       'ses_owner',
       'Session archives',

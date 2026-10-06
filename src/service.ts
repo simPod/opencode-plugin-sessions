@@ -134,19 +134,12 @@ export class SessionArchive {
     };
   }
 
-  archive(
-    preview: ArchivePreview,
-    exclusiveUseConfirmed: boolean,
-  ): Promise<{ id: string; path: string }> {
+  archive(preview: ArchivePreview): Promise<{ id: string; path: string }> {
     return this.#exclusive(async () => {
-      if (!exclusiveUseConfirmed)
-        throw new Error(
-          'Explicit exclusive-use confirmation is required before deletion.',
-        );
       const transfers = await this.#capture(preview.rootSessionID);
       if (fingerprint(transfers) !== preview.fingerprint) {
         throw new Error(
-          'The session family changed after confirmation. Nothing was deleted.',
+          'The session family changed after preview. Nothing was deleted.',
         );
       }
       const bundle = Bundle.parse({
@@ -206,7 +199,7 @@ export class SessionArchive {
         fingerprint(bundle) !== expectedFingerprint
       ) {
         throw new Error(
-          'The archive changed after confirmation. Nothing was imported.',
+          'The archive changed after inspection. Nothing was imported.',
         );
       }
       for (const transfer of bundle.sessions) {
