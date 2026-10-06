@@ -4,6 +4,7 @@ import { ArchiveID, Bundle, Summary } from './schema.ts';
 
 export const Archives = Rpc.define({
   id: 'simpod-session-archive',
+  events: {},
   methods: {
     list: { input: z.strictObject({}), output: z.array(Summary) },
     read: { input: z.strictObject({ id: ArchiveID }), output: Bundle },

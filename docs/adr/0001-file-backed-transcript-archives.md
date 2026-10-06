@@ -39,3 +39,9 @@ state that native import does not restore are refused. Existing IDs prevent
 restore, and partial restoration needs manual inspection rather than unsafe
 automatic rollback. A future atomic native archive API should replace this
 destructive sequence and supersede this ADR.
+
+The V2.0.24 SDK's published declarations omit explicit `undefined` from two
+generic constraints used by its own generated types. Keep strict checking and
+apply a declaration-only package patch until the SDK fixes those constraints.
+Install TUI type peers for builds; do not disable library checking to avoid
+them.
