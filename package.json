@@ -1,7 +1,7 @@
 {
-  "name": "@simpod/opencode-session-archive",
+  "name": "@simpod/opencode-plugin-sessions",
   "version": "0.1.0",
-  "description": "Archive OpenCode V2 session transcripts to private JSON files and restore them through the API.",
+  "description": "OpenCode V2 session tools for private transcript archives and restoration.",
   "type": "module",
   "private": true,
   "license": "MIT",

@@ -7,7 +7,7 @@ import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
 
 export default Plugin.define({
-  id: 'simpod-session-archive-tui',
+  id: 'simpod-sessions-tui',
   setup(context) {
     const rpc = context.client.rpc(Archives);
     // Include preview and confirmation in the guard. Never queue destructive UI actions.

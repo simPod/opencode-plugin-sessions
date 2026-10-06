@@ -12,9 +12,10 @@ restore a family. Archive means verified JSON export followed by recursive
 native deletion. Unarchive means native import with original IDs, parents first.
 These commands must not invoke a model.
 
-Storage is configurable and resides on the connected server. Project folders use
-a readable label plus a stable project key. Worktrees of the same Git project
-share storage; unrelated repositories and non-Git locations do not.
+Storage defaults to `~/.opencode-session-archives` on the connected server and
+remains configurable through `storageDirectory`. Project folders use a readable
+label plus a stable project key. Worktrees of the same Git project share
+storage; unrelated repositories and non-Git locations do not.
 
 ## Safety requirements
 

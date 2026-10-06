@@ -10,16 +10,13 @@ const Options = z.strictObject({
 });
 
 export default Plugin.define({
-  id: 'simpod-session-archive',
+  id: 'simpod-sessions',
   async setup(context) {
     const options = Options.parse(context.options);
     const configured = options.storageDirectory;
     const directory =
       configured === undefined
-        ? join(
-            process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'),
-            'opencode-session-archive',
-          )
+        ? join(homedir(), '.opencode-session-archives')
         : configured === '~'
           ? homedir()
           : configured.startsWith('~/')

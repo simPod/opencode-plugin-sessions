@@ -1,4 +1,4 @@
-# OpenCode Session Archive
+# OpenCode Sessions Plugin
 
 An OpenCode V2 plugin that saves session transcripts to private JSON files, then
 deletes the live sessions. Restoring an archive imports the original session IDs
@@ -47,9 +47,9 @@ implementation worktree:
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "/absolute/path/to/opencode-session-archive",
+      "package": "/absolute/path/to/opencode-plugin-sessions",
       "options": {
-        "storageDirectory": "~/session-archives",
+        "storageDirectory": "~/.opencode-session-archives",
       },
     },
   ],
@@ -64,11 +64,13 @@ published to npm; installation uses the built checkout.
 ## Storage
 
 `storageDirectory` accepts an absolute path or `~/...`. Without it, the plugin
-uses `$XDG_DATA_HOME/opencode-session-archive`, or
-`~/.local/share/opencode-session-archive` when that variable is unset.
+uses `~/.opencode-session-archives`. For remote connections, `~` is the server
+user's home, not the client's home. `XDG_DATA_HOME` does not change this
+default. Existing archives are not moved; set `storageDirectory` to their
+current directory if needed.
 
 ```text
-session-archives/
+~/.opencode-session-archives/
   my-project--<stable-project-hash>/
     <archive-uuid>.json
 ```

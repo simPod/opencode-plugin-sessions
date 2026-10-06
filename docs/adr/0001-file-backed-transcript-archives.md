@@ -26,6 +26,12 @@ checksum. Validate native records with OpenCode's V2 schema. Use configurable
 server-side storage, stable per-project directories, private permissions, and
 atomic no-overwrite file publication. Retain all archives after restoration.
 
+Name the package `@simpod/opencode-plugin-sessions` so other session tools can
+be added without another package rename. Default storage to the server user's
+`~/.opencode-session-archives`; keep `storageDirectory` configurable. Keep the
+archive format, archive RPC identity, and slash commands unchanged. Do not move
+existing archive files automatically.
+
 ## Consequences
 
 Native lifecycle events keep clients informed, and unrelated projects have
