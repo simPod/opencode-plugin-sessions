@@ -16,17 +16,24 @@ export interface SessionGateway {
   import(data: SessionTransferData): Promise<SessionInfo>;
 }
 
-export function gateway(client: OpenCodeClient): SessionGateway {
+export function gateway(
+  client: OpenCodeClient,
+  signal?: AbortSignal,
+): SessionGateway {
+  const options = signal ? { signal } : undefined;
   async function sessions(parentID?: string): Promise<SessionInfo[]> {
     const found: SessionInfo[] = [];
     let cursor: string | undefined;
     const seen = new Set<string>();
     do {
-      const page = await client.session.list({
-        limit: 100,
-        ...(parentID === undefined ? {} : { parentID }),
-        ...(cursor === undefined ? {} : { cursor }),
-      });
+      const page = await client.session.list(
+        {
+          limit: 100,
+          ...(parentID === undefined ? {} : { parentID }),
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+        options,
+      );
       found.push(...page.data);
       cursor =
         page.data.length === 0 ? undefined : (page.cursor.next ?? undefined);
@@ -38,7 +45,7 @@ export function gateway(client: OpenCodeClient): SessionGateway {
   }
 
   return {
-    get: (sessionID) => client.session.get({ sessionID }),
+    get: (sessionID) => client.session.get({ sessionID }, options),
     children: (id) => sessions(id),
     existing: async () =>
       new Set((await sessions()).map((session) => session.id)),
@@ -47,11 +54,14 @@ export function gateway(client: OpenCodeClient): SessionGateway {
       let cursor: string | undefined;
       const seen = new Set<string>();
       do {
-        const page = await client.message.list({
-          sessionID,
-          limit: 100,
-          ...(cursor === undefined ? { order: 'asc' as const } : { cursor }),
-        });
+        const page = await client.message.list(
+          {
+            sessionID,
+            limit: 100,
+            ...(cursor === undefined ? { order: 'asc' as const } : { cursor }),
+          },
+          options,
+        );
         found.push(...page.data);
         cursor =
           page.data.length === 0 ? undefined : (page.cursor.next ?? undefined);
@@ -62,14 +72,14 @@ export function gateway(client: OpenCodeClient): SessionGateway {
       return found;
     },
     busy: async (sessionID) => {
-      const active = await client.session.active();
-      const inbox = await client.session.inbox.list({ sessionID });
+      const active = await client.session.active(options);
+      const inbox = await client.session.inbox.list({ sessionID }, options);
       return active[sessionID] !== undefined || inbox.length !== 0;
     },
     export: (sessionID) =>
-      client.session.export({ sessionID, sanitize: false }),
-    remove: (sessionID) => client.session.remove({ sessionID }),
+      client.session.export({ sessionID, sanitize: false }, options),
+    remove: (sessionID) => client.session.remove({ sessionID }, options),
     import: (data) =>
-      client.session.import({ ...data, location: data.info.location }),
+      client.session.import({ ...data, location: data.info.location }, options),
   };
 }

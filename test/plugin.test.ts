@@ -14,7 +14,9 @@ test('server plugin uses its home-directory default and honors explicit storage 
   // A separate server process keeps HOME changes out of other tests. Its RPC
   // registration calls the real handler, which creates project-scoped storage.
   const script = `
+    import { strict as assert } from 'node:assert';
     import plugin from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+    const commands = [];
     await plugin.setup({
       options: JSON.parse(process.env.ARCHIVE_OPTIONS),
       location: { directory: '/synthetic/project', project: {
@@ -24,7 +26,12 @@ test('server plugin uses its home-directory default and honors explicit storage 
         await handlers.list({});
         return { dispose: async () => {} };
       } },
+      command: { transform: async (register) => {
+        register({ add: (command) => commands.push(command.name) });
+        return { dispose: async () => {} };
+      } },
     });
+    assert.deepEqual(commands.sort(), ['session-archive', 'session-archives', 'session-unarchive']);
   `;
   const cases = [
     {

@@ -1,7 +1,10 @@
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join } from 'node:path';
 import { Plugin } from '@opencode/plugin';
 import { z } from 'zod';
+import { desktopClient } from './desktop-client.ts';
+import { desktopCommands } from './desktop.ts';
 import { Archives } from './rpc.ts';
 import { FileArchiveStorage } from './storage.ts';
 
@@ -37,11 +40,44 @@ export default Plugin.define({
       ),
       projectDirectory: context.location.directory,
     });
+    const instanceID = randomUUID();
+    const lifetime = new AbortController();
     const registration = await context.rpc.register(Archives, {
+      instance: async () => ({ id: instanceID }),
       list: () => storage.list(),
       read: ({ id }) => storage.read(id),
       save: ({ bundle }) => storage.save(bundle),
     });
-    return () => registration.dispose();
+    let commands;
+    try {
+      const definitions = desktopCommands(
+        () =>
+          desktopClient(
+            {
+              directory: context.location.directory,
+              ...(context.location.workspaceID === undefined
+                ? {}
+                : { workspaceID: context.location.workspaceID }),
+            },
+            instanceID,
+            lifetime.signal,
+          ),
+        storage,
+        context.location.project.id,
+        lifetime.signal,
+      );
+      commands = await context.command.transform((editor) => {
+        for (const command of definitions) editor.add(command);
+      });
+    } catch (error) {
+      lifetime.abort();
+      await registration.dispose();
+      throw error;
+    }
+    return async () => {
+      lifetime.abort();
+      await commands.dispose();
+      await registration.dispose();
+    };
   },
 });

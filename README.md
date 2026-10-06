@@ -12,8 +12,8 @@ backup of an actively shared session.
 
 ## Commands
 
-The TUI plugin adds real slash commands and command-palette entries. It does not
-submit prompts to a model:
+The plugin adds real desktop slash commands, plus TUI slash commands and
+command-palette entries. It does not submit prompts to a model:
 
 - `/session-archive [session-id]`: preview the current session, or the supplied
   ID, and its descendants. Confirm exclusive use before saving and deleting.
@@ -22,11 +22,26 @@ submit prompts to a model:
 - `/session-archives`: browse the current project's archives and select one to
   restore after confirmation.
 
+Desktop commands use native question panels for selection, preview, and
+confirmation. Choose the explicit exclusive-use option to proceed; any other
+answer or cancellation makes no changes. Commands run immediately and cannot be
+queued. Result panels require acknowledgement. When archiving the open session,
+open another session from the sidebar afterward. Restore returns the sessions to
+the list; it does not automatically open them in desktop.
+
+Desktop commands require the server's existing managed-service registration. The
+plugin authenticates with that registration and verifies that it connects to its
+own hosting plugin instance before reading or changing sessions. It never starts
+a second server. Standalone or embedded hosts without a matching registration
+are refused; the TUI flow does not have this restriction.
+
 The server plugin stores files through RPC. The TUI uses its existing
 authenticated client for session operations, so it never discovers a different
 local server. This also supports a remote OpenCode server: archive files are
-stored on that server. These commands are TUI features, not web/desktop UI
-buttons. Successful deletion leaves the archived chat; restoration opens it.
+stored on that server. Desktop commands also work when connected to a remote
+managed server; its service registration is read on that server, not the desktop
+machine. The plugin does not add custom desktop buttons. Successful TUI deletion
+leaves the archived chat; TUI restoration opens it.
 
 ## Install
 
@@ -39,8 +54,8 @@ npm run build
 ```
 
 Builds use Node 24 type declarations because OpenTUI 0.5.14's `KeyHandler.emit`
-declaration is incompatible with Node 26's expanded `EventEmitter` types.
-The runtime and CI use Node 26; strict library checking remains enabled.
+declaration is incompatible with Node 26's expanded `EventEmitter` types. The
+runtime and CI use Node 26; strict library checking remains enabled.
 
 Add the package to the relevant OpenCode configuration. Replace the paths with
 absolute paths on the server. Do not point configuration at a temporary

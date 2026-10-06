@@ -7,10 +7,17 @@ their transcripts available for later restoration.
 
 ## Behavior
 
-Provide TUI slash commands to archive a session family, browse archives, and
-restore a family. Archive means verified JSON export followed by recursive
-native deletion. Unarchive means native import with original IDs, parents first.
-These commands must not invoke a model.
+Provide desktop and TUI slash commands to archive a session family, browse
+archives, and restore a family. Archive means verified JSON export followed by
+recursive native deletion. Unarchive means native import with original IDs,
+parents first. These commands must not invoke a model.
+
+Desktop commands must appear in the slash-command list. Use native question
+forms for archive selection, previews, explicit exclusive-use confirmation, and
+results. Cancellation or any non-affirmative answer must make no changes.
+Commands cannot be queued. After archiving the open session, the user can open
+another session from the sidebar; restoring makes the original sessions
+available in the session list without automatic navigation.
 
 Storage defaults to `~/.opencode-session-archives` on the connected server and
 remains configurable through `storageDirectory`. Project folders use a readable
@@ -34,14 +41,18 @@ confirmation. Do not describe this workflow as lossless.
 ## Non-goals
 
 No direct SQLite edits, synthetic native events, automatic scheduled archiving,
-web/desktop UI controls, arbitrary-file imports, archive-file deletion, or full
-runtime/project backups. Do not change global OpenCode configuration during
-development or archive real user sessions as a validation step.
+custom web/desktop UI extensions, arbitrary-file imports, archive-file deletion,
+or full runtime/project backups. Do not change global OpenCode configuration
+during development or archive real user sessions as a validation step.
 
 ## Acceptance and rollout
 
 Tests must show private, verified, no-overwrite storage; project isolation;
 complete descendant handling; safe refusal; and parent-first restoration.
-Publish the repository privately. Install the built checkout only after the user
-chooses to enable it. See
-[ADR 0001](adr/0001-file-backed-transcript-archives.md).
+Desktop coverage must also show command registration, exact-answer confirmation,
+native question form compatibility, and refusal of a connection to a different
+server. Desktop commands require a managed service registration on their host;
+standalone and embedded servers fail closed. TUI remote connections remain
+supported. Publish the repository privately. Install the built checkout only
+after the user chooses to enable it. See
+[ADR 0002](adr/0002-desktop-session-commands.md).

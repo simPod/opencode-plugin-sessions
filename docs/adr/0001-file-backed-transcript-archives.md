@@ -4,6 +4,8 @@
 
 Accepted. Guarded non-atomic deletion was explicitly approved for the first
 version. Implements the [session archive requirements](../session-archive.md).
+The TUI-only interaction and server-storage-only decisions are superseded by
+[ADR 0002](0002-desktop-session-commands.md).
 
 ## Context
 

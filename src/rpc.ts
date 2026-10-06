@@ -6,6 +6,10 @@ export const Archives = Rpc.define({
   id: 'simpod-session-archive',
   events: {},
   methods: {
+    instance: {
+      input: z.strictObject({}),
+      output: z.strictObject({ id: z.uuid() }),
+    },
     list: { input: z.strictObject({}), output: z.array(Summary) },
     read: { input: z.strictObject({ id: ArchiveID }), output: Bundle },
     save: {
