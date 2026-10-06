@@ -38,6 +38,10 @@ npm ci
 npm run build
 ```
 
+Builds use Node 24 type declarations because OpenTUI 0.5.14's `KeyHandler.emit`
+declaration is incompatible with Node 26's expanded `EventEmitter` types.
+The runtime and CI use Node 26; strict library checking remains enabled.
+
 Add the package to the relevant OpenCode configuration. Replace the paths with
 absolute paths on the server. Do not point configuration at a temporary
 implementation worktree:
