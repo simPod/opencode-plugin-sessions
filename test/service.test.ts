@@ -482,7 +482,7 @@ test('native recursive deletion failure and incomplete deletion retain backup wi
     {
       mode: 'incomplete',
       remaining: ['ses_grandchild'],
-      error: /Deletion was incomplete/,
+      error: /Deletion could not be verified/,
     },
   ] as const;
   for (const row of cases)
