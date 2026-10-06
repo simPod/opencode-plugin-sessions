@@ -335,7 +335,9 @@ test('invalid parent links and repeated descendant IDs prevent archive writes an
 test('visible workspace identity prevents archive writes and all restoration imports', async (t) => {
   await t.test('archive', async () => {
     const f = fixture();
-    f.sessions.item('ses_child').info.location.workspaceID = 'wrk_fixture';
+    Object.assign(f.sessions.item('ses_child').info.location, {
+      workspaceID: 'wrk_fixture',
+    });
     await assert.rejects(
       f.service.preview('ses_root'),
       /cannot restore workspace identity/,
@@ -348,7 +350,7 @@ test('visible workspace identity prevents archive writes and all restoration imp
     const saved = await f.service.archive(await f.service.preview('ses_root'));
     const child = onlyBundle(f.storage).sessions[1];
     assert(child);
-    child.info.location.workspaceID = 'wrk_fixture';
+    Object.assign(child.info.location, { workspaceID: 'wrk_fixture' });
     await assert.rejects(
       f.service.restore(saved.id),
       /cannot restore workspace identity/,
@@ -652,10 +654,10 @@ test('restore refuses project or location reassignment and retains the archive a
     {
       name: 'workspace',
       info: {
-        location: {
-          directory: '/synthetic/ses_child',
-          workspaceID: 'wrk_other',
-        },
+        location: Object.assign(
+          { directory: '/synthetic/ses_child' },
+          { workspaceID: 'wrk_other' },
+        ),
       },
     },
   ];

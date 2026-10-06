@@ -64,7 +64,10 @@ export const Bundle = z
           message: 'V2 import cannot restore fork or revert state',
         });
       }
-      if (session.info.location.workspaceID !== undefined)
+      if (
+        'workspaceID' in session.info.location &&
+        session.info.location.workspaceID !== undefined
+      )
         context.addIssue({
           code: 'custom',
           message: 'V2 HTTP import cannot restore workspace identity',

@@ -43,7 +43,7 @@ function assertSettled(messages: SessionMessageInfo[]): void {
 
 // Native transfer does not restore these fields. Do not silently discard them.
 function assertRestorable(info: SessionInfo): void {
-  if (info.location.workspaceID !== undefined)
+  if ('workspaceID' in info.location && info.location.workspaceID !== undefined)
     throw new Error('V2 HTTP import cannot restore workspace identity.');
   if (info.fork || info.revert) {
     throw new Error(
