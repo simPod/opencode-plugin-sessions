@@ -4,7 +4,7 @@ import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { fingerprint } from './fingerprint.ts';
-import { ArchiveID, Bundle, Summary } from './schema.ts';
+import { ArchiveID, Bundle, SessionID, Summary } from './schema.ts';
 import type {
   ArchiveBundle,
   ArchiveStorage,
@@ -224,7 +224,9 @@ export class FileArchiveStorage implements ArchiveStorage {
     return bundle;
   }
 
-  async list(): Promise<ArchiveSummary[]> {
+  async list(sessionID?: string): Promise<ArchiveSummary[]> {
+    if (sessionID !== undefined && !SessionID.safeParse(sessionID).success)
+      throw new Error('Invalid session ID');
     try {
       const directory = await this.directory();
       if (directory === undefined) return [];
@@ -233,6 +235,11 @@ export class FileArchiveStorage implements ArchiveStorage {
         if (!name.endsWith('.json')) continue;
         const id = this.id(name.slice(0, -5));
         const bundle = await this.readFile(directory, id);
+        if (
+          sessionID !== undefined &&
+          !bundle.sessions.some((session) => session.info.id === sessionID)
+        )
+          continue;
         summaries.push(
           Summary.parse({
             id: bundle.id,

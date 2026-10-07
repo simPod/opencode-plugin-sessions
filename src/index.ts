@@ -54,7 +54,7 @@ export default Plugin.define({
     const registration = await context.rpc.register(Archives, {
       restoreMappings: async () => options.restoreMappings,
       instance: async () => ({ id: instanceID }),
-      list: () => storage.list(),
+      list: ({ sessionID }) => storage.list(sessionID),
       read: ({ id }) => storage.read(id),
       save: ({ bundle }) => storage.save(bundle),
     });

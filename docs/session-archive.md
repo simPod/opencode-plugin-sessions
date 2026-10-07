@@ -8,11 +8,20 @@ their transcripts available for later restoration.
 ## Behavior
 
 Provide two desktop and TUI slash commands: `/session-archive [session-id]` and
-`/session-restore [archive-id]`. Without an archive ID, restore opens the
+`/session-restore [session-id | archive-id]`. Without an ID, restore opens the
 current project's archive picker. Remove `/session-unarchive` and
 `/session-archives` without aliases. Archive means verified JSON export followed
 by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
+
+Session-ID lookup matches any saved root or descendant in archives available to
+the current project, including explicitly mapped sources. Restore the whole
+saved family immediately when exactly one archive matches. For multiple matches,
+show only those archives in the picker; never choose one automatically. No match,
+cancellation, or a selection outside the matching set must not import sessions.
+Keep archive UUID input compatible. Before import, check that the selected
+archive still contains the supplied session ID. Do not widen project scope or
+change saved files, archive identity, or restoration safeguards for this lookup.
 
 Desktop commands must appear in the slash-command list. Use native question
 forms for archive selection and results. Archive and restore run without
@@ -92,13 +101,17 @@ mapped roots and descendants, exact source matching, destination preflight and
 post-import verification, unchanged archive files, source-scope isolation, and
 refusal of ambiguous archive IDs. Desktop and TUI coverage must show only the
 two command names, archive and restore without confirmation, and restoration by
-supplied ID or picker selection. Desktop coverage must also show command
-registration, cancellable archive selection, native question form compatibility,
-and refusal of a connection to a different server. Desktop commands require a
-managed service registration on their host; standalone and embedded servers fail
-closed. TUI remote connections remain supported. The repository is public; the
-package remains unpublished on npm. Install the built checkout only after the
-user chooses to enable it. See
+supplied ID or picker selection. Coverage must include lookup by root and
+descendant session IDs, retained UUID input, a matching-only picker for repeated
+archives, and no import for missing IDs or cancelled or invalid matching
+selections. Server coverage must show filtered summary RPCs, without returning
+transcript bodies or expanding project scope. Desktop coverage must also show
+command registration, cancellable archive selection, native question form
+compatibility, and refusal of a connection to a different server. Desktop
+commands require a managed service registration on their host; standalone and
+embedded servers fail closed. TUI remote connections remain supported. The
+repository is public; the package remains unpublished on npm. Install the built
+checkout only after the user chooses to enable it. See
 [ADR 0003](adr/0003-immediate-archive-and-restore.md) and
 [ADR 0005](adr/0005-cross-project-session-trees.md) and
 [ADR 0006](adr/0006-explicit-restore-relocations.md).

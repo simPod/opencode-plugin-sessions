@@ -43,7 +43,7 @@ export default Plugin.define({
       const scope = await context.client.location.get({ location });
       const restoreMappings = await rpc.restoreMappings({}, { location });
       const storage: ArchiveStorage = {
-        list: () => rpc.list({}, { location }),
+        list: (sessionID) => rpc.list(sessionID ? { sessionID } : {}, { location }),
         read: async (id) => {
           const bundle = await rpc.read({ id }, { location });
           if (
@@ -132,34 +132,59 @@ export default Plugin.define({
               .location
           : (context.location ?? context.data.location.default());
       const argument = input?.trim();
-      if (argument && !ArchiveID.safeParse(argument).success) {
-        throw new Error('Use /session-restore [archiveUUID].');
+      const targetSessionID = SessionID.safeParse(argument).success
+        ? argument
+        : undefined;
+      if (
+        argument &&
+        !targetSessionID &&
+        !ArchiveID.safeParse(argument).success
+      ) {
+        throw new Error('Use /session-restore [sessionID | archiveUUID].');
       }
       const { storage, service, restoreMappings } = await scoped(location);
-      let id = argument;
+      let id = targetSessionID ? undefined : argument;
       if (!id) {
-        const archives = await storage.list();
+        const archives = await storage.list(targetSessionID);
         if (archives.length === 0) {
           context.ui.toast.show({
-            message: 'No session archives in this project.',
+            message: targetSessionID
+              ? `No session archives for ${targetSessionID} in this project.`
+              : 'No session archives in this project.',
             variant: 'info',
           });
           return;
         }
-        id = await context.ui.dialog.select({
-          title: 'Session archives — select to restore',
-          placeholder: 'Search archived session titles',
-          options: archives.map((archive) => ({
-            title: archive.title,
-            value: archive.id,
-            description: `${archive.sessionCount} session(s) · ${new Date(archive.createdAt).toLocaleString()}`,
-            footer: `Archive: ${archive.id} · Root: ${archive.rootSessionID}`,
-          })),
-        });
-        if (!id) return;
+        const single = archives.length === 1 ? archives[0] : undefined;
+        if (targetSessionID && single) {
+          id = single.id;
+        } else {
+          id = await context.ui.dialog.select({
+            title: 'Session archives — select to restore',
+            placeholder: 'Search archived session titles',
+            options: archives.map((archive) => ({
+              title: archive.title,
+              value: archive.id,
+              description: `${archive.sessionCount} session(s) · ${new Date(archive.createdAt).toLocaleString()}`,
+              footer: `Archive: ${archive.id} · Root: ${archive.rootSessionID}`,
+            })),
+          });
+          if (!id) return;
+          if (!archives.some((archive) => archive.id === id))
+            throw new Error(
+              'Select an archive from this project. Nothing was restored.',
+            );
+        }
       }
 
       const bundle = await storage.read(id);
+      if (
+        targetSessionID &&
+        !bundle.sessions.some((session) => session.info.id === targetSessionID)
+      )
+        throw new Error(
+          `The archive does not contain ${targetSessionID}. Nothing was restored.`,
+        );
       const restored = await service.restore(
         id,
         fingerprint(bundle),
@@ -207,7 +232,7 @@ export default Plugin.define({
           id: 'simpod.session-archive.restore',
           title: 'Restore session archive',
           description:
-            'Restore an archive UUID, or select an archive in the current project',
+            'Restore a session ID or archive UUID, or select an archive in the current project',
           group: 'Session archives',
           palette: true,
           slash: { name: 'session-restore', arguments: true },

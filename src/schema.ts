@@ -128,5 +128,5 @@ export type ArchiveSummary = z.infer<typeof Summary>;
 export interface ArchiveStorage {
   save(bundle: ArchiveBundle): Promise<{ id: string; path: string }>;
   read(id: string): Promise<ArchiveBundle>;
-  list(): Promise<ArchiveSummary[]>;
+  list(sessionID?: string): Promise<ArchiveSummary[]>;
 }

@@ -17,9 +17,16 @@ command-palette entries. It does not submit prompts to a model:
 
 - `/session-archive [session-id]`: save and verify the current session, or the
   supplied ID, and its descendants, then delete them without confirmation.
-- `/session-restore [archive-id]`: restore the supplied archive ID. Without an
-  ID, browse the current project's archives and select one to restore
-  immediately.
+- `/session-restore [session-id | archive-id]`: restore the archive that contains
+  the supplied session ID, including the whole saved family. Archive UUIDs remain
+  supported. Without an ID, browse the current project's archives and select one
+  to restore immediately.
+
+Session-ID lookup searches only archives available to the current project,
+including explicitly mapped source archives. Root and descendant IDs are
+accepted. One match restores immediately; multiple matches open a picker limited
+to those archives. No match makes no changes. Selecting a descendant restores
+the archive's root and all saved descendants, not only that session.
 
 `/session-restore` replaces `/session-unarchive` and `/session-archives`. The
 old command names are not aliases. Existing archive files and IDs are unchanged.

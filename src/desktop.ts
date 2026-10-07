@@ -71,51 +71,68 @@ export function desktopCommands(
     sessionID: string,
     argument: string,
   ): Promise<void> {
-    let id = argument;
+    const targetSessionID = SessionID.safeParse(argument).success
+      ? argument
+      : undefined;
+    let id = targetSessionID ? '' : argument;
     if (id && !ArchiveID.safeParse(id).success)
-      throw new Error('Use /session-restore [archiveUUID].');
+      throw new Error('Use /session-restore [sessionID | archiveUUID].');
     if (!id) {
-      const archives = await storage.list();
+      const archives = await storage.list(targetSessionID);
       if (!archives.length) {
         await host.report(
           sessionID,
           'Session archives',
-          'No session archives in this project.',
+          targetSessionID
+            ? `No session archives for ${targetSessionID} in this project.`
+            : 'No session archives in this project.',
         );
         return;
       }
-      const answer = await host.ask(
-        sessionID,
-        'Session archives — select to restore',
-        [
-          {
-            key: 'archive',
-            type: 'string',
-            title: 'Archive',
-            required: true,
-            custom: true,
-            options: archives.map((archive) => ({
-              value: archive.id,
-              label: archive.title,
-              description: `${archive.sessionCount} session(s) · ${new Date(archive.createdAt).toLocaleString()} · ${archive.id}`,
-            })),
-          },
-        ],
-      );
-      if (!answer) return;
-      if (
-        typeof answer.archive !== 'string' ||
-        !archives.some((archive) => archive.id === answer.archive)
-      )
-        throw new Error(
-          'Select an archive from this project. Nothing was restored.',
+      const single = archives.length === 1 ? archives[0] : undefined;
+      if (targetSessionID && single) {
+        id = single.id;
+      } else {
+        const answer = await host.ask(
+          sessionID,
+          'Session archives — select to restore',
+          [
+            {
+              key: 'archive',
+              type: 'string',
+              title: 'Archive',
+              required: true,
+              custom: true,
+              options: archives.map((archive) => ({
+                value: archive.id,
+                label: archive.title,
+                description: `${archive.sessionCount} session(s) · ${new Date(archive.createdAt).toLocaleString()} · ${archive.id}`,
+              })),
+            },
+          ],
         );
-      id = answer.archive;
+        if (!answer) return;
+        if (
+          typeof answer.archive !== 'string' ||
+          !archives.some((archive) => archive.id === answer.archive)
+        )
+          throw new Error(
+            'Select an archive from this project. Nothing was restored.',
+          );
+        id = answer.archive;
+      }
     }
     const bundle = await storage.read(id);
     if (!canRestore(bundle, scope, restoreMappings))
       throw new Error(
         'The archive belongs to another project. Nothing was restored.',
+      );
+    if (
+      targetSessionID &&
+      !bundle.sessions.some((session) => session.info.id === targetSessionID)
+    )
+      throw new Error(
+        `The archive does not contain ${targetSessionID}. Nothing was restored.`,
       );
     signal.throwIfAborted();
     const result = await new SessionArchive(host.sessions, storage).restore(
@@ -171,7 +188,7 @@ export function desktopCommands(
     ),
     command(
       'session-restore',
-      'Restore an archive ID, or select an archive from this project',
+      'Restore a session ID or archive UUID, or select an archive from this project',
       restore,
     ),
   ];

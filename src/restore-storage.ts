@@ -1,5 +1,5 @@
 import { basename } from 'node:path';
-import { ArchiveID } from './schema.ts';
+import { ArchiveID, SessionID } from './schema.ts';
 import type {
   ArchiveBundle,
   ArchiveStorage,
@@ -105,10 +105,10 @@ export function restoreStorage(
       ? canRestore(bundle, options, options.restoreMappings)
       : mappings.some((mapping) => matchesMapping(bundle, options, mapping));
 
-  async function discover() {
+  async function discover(sessionID?: string) {
     const archives = new Map<string, ArchiveSummary>();
     for (const store of stores) {
-      for (const summary of await store.storage.list()) {
+      for (const summary of await store.storage.list(sessionID)) {
         const bundle = await store.storage.read(summary.id);
         if (!eligible(bundle, store.mappings)) continue;
         if (archives.has(summary.id))
@@ -121,9 +121,11 @@ export function restoreStorage(
 
   return {
     save: (bundle) => primary.save(bundle),
-    async list() {
+    async list(sessionID) {
+      if (sessionID !== undefined && !SessionID.safeParse(sessionID).success)
+        throw new Error('Invalid session ID');
       try {
-        return Array.from((await discover()).values());
+        return Array.from((await discover(sessionID)).values());
       } catch {
         throw new Error(
           'Cannot list archives: corrupt, unsafe, or ambiguous archive storage',

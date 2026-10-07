@@ -51,19 +51,26 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
   const reports: string[] = [];
   const answers: Array<FormAnswer | undefined> = [];
   const events: string[] = [];
+  const lookups: Array<string | undefined> = [];
   const abort = new AbortController();
   let beforeAnswer: (() => void) | undefined;
   let answerGate: Promise<void> | undefined;
   let reportFailure = false;
   const storage: ArchiveStorage = {
-    async list() {
-      return [...bundles.values()].map((bundle) => ({
-        id: bundle.id,
-        rootSessionID: bundle.rootSessionID,
-        title: bundle.sessions[0]?.info.title ?? '',
-        createdAt: bundle.createdAt,
-        sessionCount: bundle.sessions.length,
-      }));
+    async list(sessionID?: string) {
+      lookups.push(sessionID);
+      return [...bundles.values()]
+        .filter((bundle) =>
+          !sessionID ||
+          bundle.sessions.some((session) => session.info.id === sessionID),
+        )
+        .map((bundle) => ({
+          id: bundle.id,
+          rootSessionID: bundle.rootSessionID,
+          title: bundle.sessions[0]?.info.title ?? '',
+          createdAt: bundle.createdAt,
+          sessionCount: bundle.sessions.length,
+        }));
     },
     async read(id) {
       const bundle = bundles.get(id);
@@ -148,15 +155,20 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
       delivery,
     });
   }
-  function archived(projectID = 'project-a') {
+  function archived(projectID = 'project-a', id = archiveID, descendant = false) {
+    const child = transfer('ses_child', projectID);
+    child.info.parentID = 'ses_archived';
     const bundle = Bundle.parse({
       format: 'opencode-session-archive',
       version: 1,
-      id: archiveID,
+      id,
       createdAt: 3,
       rootSessionID: 'ses_archived',
       projectID,
-      sessions: [transfer('ses_archived', projectID)],
+      sessions: [
+        transfer('ses_archived', projectID),
+        ...(descendant ? [child] : []),
+      ],
     });
     bundles.set(bundle.id, bundle);
   }
@@ -168,6 +180,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     reports,
     answers,
     events,
+    lookups,
     abort,
     archived,
     onAnswer(callback: () => void) {
@@ -201,32 +214,41 @@ test('desktop can archive the open session without trying to report to the delet
   assert.deepEqual(f.questions, []);
 });
 
-test('desktop restore with an ID imports immediately without a picker and retains its archive', async (t) => {
-  for (const mapped of [false, true])
-    await t.test(mapped ? 'mapped root' : 'original root', async () => {
-      const f = fixture(
-        mapped
-          ? [
-              {
-                from: {
-                  projectID: 'project-old',
-                  directory: '/synthetic/project',
-                },
-                to: { projectID: 'project-a', directory: '/synthetic/project' },
-              },
-            ]
-          : [],
+test('desktop restore by archive, root, or descendant ID imports the whole tree without a picker', async (t) => {
+  for (const argument of [archiveID, 'ses_archived', 'ses_child'])
+    for (const mapped of [false, true])
+      await t.test(
+        `${argument} ${mapped ? 'mapped root' : 'original root'}`,
+        async () => {
+          const f = fixture(
+            mapped
+              ? [
+                  {
+                    from: {
+                      projectID: 'project-old',
+                      directory: '/synthetic/project',
+                    },
+                    to: {
+                      projectID: 'project-a',
+                      directory: '/synthetic/project',
+                    },
+                  },
+                ]
+              : [],
+          );
+          f.archived(mapped ? 'project-old' : 'project-a', archiveID, true);
+          const original = structuredClone(f.bundles.get(archiveID));
+          await f.run('session-restore', argument);
+          assert(f.state.has('ses_archived'));
+          assert(f.state.has('ses_child'));
+          assert(f.bundles.has(archiveID));
+          assert.deepEqual(f.questions, []);
+          assert.deepEqual(f.events, ['import', 'import']);
+          assert.deepEqual(f.lookups, argument === archiveID ? [] : [argument]);
+          assert.equal(f.state.get('ses_archived')?.info.projectID, 'project-a');
+          assert.deepEqual(f.bundles.get(archiveID), original);
+        },
       );
-      f.archived(mapped ? 'project-old' : 'project-a');
-      const original = structuredClone(f.bundles.get(archiveID));
-      await f.run('session-restore', archiveID);
-      assert(f.state.has('ses_archived'));
-      assert(f.bundles.has(archiveID));
-      assert.deepEqual(f.questions, []);
-      assert.deepEqual(f.events, ['import']);
-      assert.equal(f.state.get('ses_archived')?.info.projectID, 'project-a');
-      assert.deepEqual(f.bundles.get(archiveID), original);
-    });
 });
 
 test('desktop restore without an ID restores immediately after selection and retains its archive', async (t) => {
@@ -277,6 +299,56 @@ test('desktop restore picker cancellation, invalid selection, and project mismat
   assert.deepEqual(f.events, []);
 });
 
+test('desktop session lookup limits repeated archives to the picker and rejects other selections', async (t) => {
+  for (const outcome of ['restore', 'cancel', 'invalid', 'nonmatching', 'changed'])
+    await t.test(outcome, async () => {
+      const f = fixture();
+      const secondID = randomUUID();
+      const unrelatedID = randomUUID();
+      f.archived('project-a', archiveID, true);
+      f.archived('project-a', secondID, true);
+      f.archived('project-a', unrelatedID);
+      f.answers.push(
+        outcome === 'cancel'
+          ? undefined
+          : {
+              archive:
+                outcome === 'invalid'
+                  ? randomUUID()
+                  : outcome === 'nonmatching'
+                    ? unrelatedID
+                    : secondID,
+            },
+      );
+      if (outcome === 'changed')
+        f.onAnswer(() => {
+          f.archived('project-a', secondID);
+        });
+      if (outcome === 'invalid' || outcome === 'nonmatching')
+        await assert.rejects(
+          f.run('session-restore', 'ses_child'),
+          /Select an archive/,
+        );
+      else if (outcome === 'changed')
+        await assert.rejects(
+          f.run('session-restore', 'ses_child'),
+          /does not contain.*ses_child/,
+        );
+      else await f.run('session-restore', 'ses_child');
+      const question = f.questions[0];
+      assert(question);
+      const field = question.fields[0];
+      assert(field.type === 'string');
+      assert.deepEqual(field.options?.map((option) => option.value), [
+        archiveID,
+        secondID,
+      ]);
+      assert.deepEqual(f.lookups, ['ses_child']);
+      assert.deepEqual(f.events, outcome === 'restore' ? ['import', 'import'] : []);
+      assert.equal(f.state.has('ses_child'), outcome === 'restore');
+    });
+});
+
 test('desktop refuses queued commands and stops before writes when the plugin unloads during selection', async () => {
   const f = fixture();
   await assert.rejects(
@@ -293,11 +365,21 @@ test('desktop refuses queued commands and stops before writes when the plugin un
   assert.deepEqual(f.events, []);
 });
 
-test('desktop shows an empty archive list without starting restoration', async () => {
-  const f = fixture();
-  await f.run('session-restore');
-  assert.match(f.reports[0] ?? '', /No session archives/);
-  assert.deepEqual(f.events, []);
+test('desktop reports no archives for the project or requested session without restoration', async (t) => {
+  for (const argument of ['', 'ses_missing'])
+    await t.test(argument || 'project', async () => {
+      const f = fixture();
+      if (argument) f.archived();
+      await f.run('session-restore', argument);
+      assert.match(
+        f.reports[0] ?? '',
+        argument
+          ? /No session archives.*ses_missing.*this project/
+          : /No session archives/,
+      );
+      assert.deepEqual(f.questions, []);
+      assert.deepEqual(f.events, []);
+    });
 });
 
 test('desktop refuses a second operation while another command waits for archive selection', async () => {

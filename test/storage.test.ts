@@ -17,7 +17,11 @@ import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import type { SessionInfo } from '@opencode/client';
-import type { ArchiveBundle, RestoreMapping } from '../src/schema.ts';
+import type {
+  ArchiveBundle,
+  ArchiveSummary,
+  RestoreMapping,
+} from '../src/schema.ts';
 import { fingerprint } from '../src/fingerprint.ts';
 import { restoreStorage } from '../src/restore-storage.ts';
 import { FileArchiveStorage } from '../src/storage.ts';
@@ -89,7 +93,7 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
   assert.equal((await stat(dirname(saved.path))).mode & 0o777, 0o700);
   assert.equal((await stat(saved.path)).mode & 0o777, 0o600);
   assert.deepEqual(await readdir(dirname(saved.path)), [`${saved.id}.json`]);
-  assert.deepEqual(await storage.list(), [
+  const summaries: ArchiveSummary[] = [
     {
       id: original.id,
       rootSessionID: original.rootSessionID,
@@ -97,7 +101,11 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
       createdAt: original.createdAt,
       sessionCount: 2,
     },
-  ]);
+  ];
+  assert.deepEqual(await storage.list(), summaries);
+  assert.deepEqual(await storage.list('ses_fixture'), summaries);
+  assert.deepEqual(await storage.list('ses_child'), summaries);
+  assert.deepEqual(await storage.list('ses_missing'), []);
   await assert.rejects(
     storage.save({ ...original, createdAt: original.createdAt + 1 }),
     /Cannot save archive/,
@@ -121,7 +129,9 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
       },
     ],
   });
-  assert.deepEqual(await view.list(), await storage.list());
+  assert.deepEqual(await view.list(), summaries);
+  assert.deepEqual(await view.list('ses_child'), summaries);
+  assert.deepEqual(await view.list('ses_missing'), []);
   assert.deepEqual(await view.read(saved.id), original);
   const newBundle = bundle('project-new', randomUUID(), '/synthetic/new');
   const newSaved = await view.save(newBundle);
@@ -164,6 +174,10 @@ test('restore discovery admits only exact mapped roots and deduplicates shared G
     new Set((await view.list()).map(({ id }) => id)),
     new Set([first.id, second.id]),
   );
+  assert.deepEqual(
+    new Set((await view.list('ses_fixture')).map(({ id }) => id)),
+    new Set([first.id, second.id]),
+  );
   assert.equal(
     (await view.read(first.id)).sessions[0]?.info.location.directory,
     '/synthetic/project',
@@ -180,6 +194,7 @@ test('restore discovery admits only exact mapped roots and deduplicates shared G
     restoreMappings: mappings,
   });
   assert.deepEqual(await wrongScope.list(), []);
+  assert.deepEqual(await wrongScope.list('ses_fixture'), []);
   await assert.rejects(wrongScope.read(first.id), /Cannot read archive/);
   const wrongProject = restoreStorage(current, {
     storageDirectory,

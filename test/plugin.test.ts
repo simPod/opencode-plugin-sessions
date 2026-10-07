@@ -8,6 +8,63 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 
+test('server archive listing finds root and descendant session IDs without returning transcripts', async (t) => {
+  const storageDirectory = await mkdtemp(join(tmpdir(), 'session-plugin-lookup-'));
+  t.after(() => rm(storageDirectory, { recursive: true, force: true }));
+  const script = `
+    import { strict as assert } from 'node:assert';
+    import { randomUUID } from 'node:crypto';
+    import plugin from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+    let archive;
+    const cleanup = await plugin.setup({
+      options: { storageDirectory: process.env.ARCHIVE_STORAGE },
+      location: { directory: '/synthetic/project', project: {
+        id: 'project-lookup', canonical: '/synthetic/project',
+      } },
+      rpc: { register: async (_definition, handlers) => {
+        archive = handlers;
+        return { dispose: async () => {} };
+      } },
+      command: { transform: async () => ({ dispose: async () => {} }) },
+    });
+    const info = {
+      id: 'ses_root', projectID: 'project-lookup', title: 'Lookup session',
+      location: { directory: '/synthetic/project' }, cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 1, updated: 2 },
+    };
+    const bundle = {
+      format: 'opencode-session-archive', version: 1, id: randomUUID(),
+      createdAt: 3, projectID: info.projectID, rootSessionID: info.id,
+      sessions: [
+        { info, messages: [] },
+        { info: { ...info, id: 'ses_child', parentID: info.id, projectID: 'other-project' }, messages: [] },
+      ],
+    };
+    await archive.save({ bundle });
+    const repeated = { ...bundle, id: randomUUID(), createdAt: 4 };
+    await archive.save({ bundle: repeated });
+    const unrelated = {
+      ...bundle, id: randomUUID(), rootSessionID: 'ses_unrelated',
+      sessions: [{ info: { ...info, id: 'ses_unrelated' }, messages: [] }],
+    };
+    await archive.save({ bundle: unrelated });
+    for (const sessionID of ['ses_root', 'ses_child']) {
+      const matches = await archive.list({ sessionID });
+      assert.deepEqual(new Set(matches.map(item => item.id)), new Set([bundle.id, repeated.id]));
+      assert(matches.every(item => !('sessions' in item)));
+    }
+    assert.deepEqual(await archive.list({ sessionID: 'ses_missing' }), []);
+    assert.equal((await archive.list({})).length, 3);
+    await cleanup();
+  `;
+  await execute(
+    process.execPath,
+    ['--experimental-strip-types', '--input-type=module', '-e', script],
+    { env: { ...process.env, ARCHIVE_STORAGE: storageDirectory } },
+  );
+});
+
 test('server plugin uses its home-directory default and honors explicit storage overrides', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'session-plugin-home-'));
   t.after(() => rm(home, { recursive: true, force: true }));
