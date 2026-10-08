@@ -8,12 +8,17 @@ session trees without keeping a transcript.
 
 ## Behavior
 
-Provide three desktop and TUI slash commands: `/session-archive [session-id]`,
-`/session-restore [session-id | archive-id]`, and `/session-delete [session-id]`.
+Provide four desktop and TUI slash commands: `/session-id`,
+`/session-archive [session-id]`, `/session-restore [session-id | archive-id]`, and
+`/session-delete [session-id]`.
 Without an ID, restore opens the current project's archive picker. Remove
 `/session-unarchive` and `/session-archives` without aliases. Archive means verified JSON export followed
 by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
+
+Session ID shows the exact command invocation's session ID in a native result
+panel, including when the current session is a child. Accept no arguments. Do not
+read transcripts, change sessions, or read or change archive files.
 
 Delete means permanent native recursive deletion without archive creation or
 archive-file changes. Without an ID, delete uses the open session. The user
@@ -130,7 +135,8 @@ original project location is unavailable or changed. Coverage must include
 mapped roots and descendants, exact source matching, destination preflight and
 post-import verification, unchanged archive files, source-scope isolation, and
 refusal of ambiguous archive IDs. Desktop and TUI coverage must show only the
-three command names, archive, restore, and delete without confirmation, and
+four command names, the exact current root or child ID without session or archive
+changes, archive, restore, and delete without confirmation, and
 restoration by supplied ID or picker selection. Coverage must include lookup by root and
 descendant session IDs, retained UUID input, a matching-only picker for repeated
 archives, and no import for missing IDs or cancelled or invalid matching

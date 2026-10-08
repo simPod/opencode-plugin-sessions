@@ -16,6 +16,8 @@ The server plugin adds slash commands in desktop and TUI. The TUI plugin adds
 command-palette actions, without duplicate slash entries. Neither submits prompts
 to a model:
 
+- `/session-id`: show the exact current session ID in a result panel. No arguments
+  are accepted; sessions and archive files are not changed.
 - `/session-archive [session-id]`: save and verify the current session, or the
   supplied ID, and its descendants, then delete them without confirmation.
 - `/session-restore [session-id | archive-id]`: restore the archive that contains
