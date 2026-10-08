@@ -12,8 +12,9 @@ backup of an actively shared session.
 
 ## Commands
 
-The plugin adds real desktop slash commands, plus TUI slash commands and
-command-palette entries. It does not submit prompts to a model:
+The server plugin adds slash commands in desktop and TUI. The TUI plugin adds
+command-palette actions, without duplicate slash entries. Neither submits prompts
+to a model:
 
 - `/session-archive [session-id]`: save and verify the current session, or the
   supplied ID, and its descendants, then delete them without confirmation.
@@ -36,12 +37,13 @@ old command names are not aliases. Existing archive files and IDs are unchanged.
 
 Archive and restore run without confirmation in both desktop and TUI. Selecting
 an archive restores it immediately; cancelling the archive picker makes no
-changes. Desktop commands use native question panels for archive selection,
-deletion confirmation, and results. Commands cannot be queued. Result panels
-require acknowledgement, not approval of the completed operation. After archiving
-or deleting the open session, open another session from the sidebar afterward.
-Restore returns the sessions to the list; it does not automatically open them in
-desktop.
+changes. Slash commands use native question panels for archive selection,
+deletion confirmation, and results in both desktop and TUI. Commands run
+immediately and cannot be queued. Result panels require acknowledgement, not
+approval of the completed operation. After archiving or deleting the open session
+through a slash command, open another session from the session list afterward.
+Slash-based restore returns sessions to the list but does not automatically open
+them in either client.
 
 Delete requires confirmation in both desktop and TUI. Its warning identifies the
 session and the number of sessions in its tree. Cancel makes no changes. Unlike
@@ -54,19 +56,24 @@ Stop other clients and automations if you need the confirmed set to stay fixed.
 There is no backup or automatic recovery. Descendants from other projects are
 also deleted. Use `/session-archive` to keep a restorable transcript.
 
-Desktop commands require the server's existing managed-service registration. The
+The TUI command palette retains **Archive session tree**, **Restore session
+archive**, and **Delete session tree permanently** under **Session archives**.
+These actions use TUI dialogs. Archive and delete act on the open session and
+leave the removed chat; restore opens the archive picker and then opens the
+restored session.
+
+Slash commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its
 own hosting plugin instance before reading or changing sessions. It never starts
 a second server. Standalone or embedded hosts without a matching registration
-are refused; the TUI flow does not have this restriction.
+are refused; the TUI palette actions do not have this restriction.
 
-The server plugin stores files through RPC. The TUI uses its existing
-authenticated client for session operations, so it never discovers a different
+The TUI palette actions use the server plugin's storage RPCs and their existing
+authenticated client for session operations, so they never discover a different
 local server. This also supports a remote OpenCode server: archive files are
-stored on that server. Desktop commands also work when connected to a remote
-managed server; its service registration is read on that server, not the desktop
-machine. The plugin does not add custom desktop buttons. Successful TUI deletion
-leaves the archived or deleted chat; TUI restoration opens it.
+stored on that server. Slash commands also work when connected to a remote
+managed server; its service registration is read on that server, not the client
+machine. The plugin does not add custom desktop buttons.
 
 ## Install
 

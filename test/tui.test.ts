@@ -189,24 +189,25 @@ async function scenario(pluginURL: string) {
   const cleanup = await plugin.setup(context as unknown as Plugin.Context);
   assert(typeof cleanup === 'function');
   assert(commands);
-  assert.deepEqual(commands.map((command) => command.slash?.name), [
-    'session-archive',
-    'session-restore',
-    'session-delete',
-  ]);
-  assert(commands.every((command) => !command.slash?.aliases?.length));
+  assert(
+    commands.every((command) => !command.slash),
+    'Only server commands must contribute slash entries',
+  );
   const archive = commands.find(
-    (command) => command.slash?.name === 'session-archive',
+    (command) => command.id === 'simpod.session-archive.archive',
   );
   const restore = commands.find(
-    (command) => command.slash?.name === 'session-restore',
+    (command) => command.id === 'simpod.session-archive.restore',
   );
   const remove = commands.find(
-    (command) => command.slash?.name === 'session-delete',
+    (command) => command.id === 'simpod.session-archive.delete',
   );
   assert(archive);
   assert(restore);
   assert(remove);
+  assert(archive.palette);
+  assert(restore.palette);
+  assert(remove.palette);
   await archive.run();
   assert.equal(state.size, 0);
   assert(savedID);
@@ -445,7 +446,7 @@ async function scenario(pluginURL: string) {
   console.log('Archive and session-ID restore completed without confirmation.');
 }
 
-test('TUI archives, restores by ID or selection, and confirms deletion with tab cleanup', async () => {
+test('TUI palette actions archive, restore, and confirm deletion without duplicate slash entries', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   const result = await execute(
     process.execPath,
