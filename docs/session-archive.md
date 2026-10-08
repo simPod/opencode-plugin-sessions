@@ -14,6 +14,11 @@ current project's archive picker. Remove `/session-unarchive` and
 by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
 
+Each command must appear once in the TUI slash-command list, even when both the
+server and TUI plugins are loaded. The server owns slash-command callbacks in
+both clients. Keep the TUI's dialogs and navigation in palette-only actions:
+archive acts on the open session; restore opens the archive picker.
+
 Session-ID lookup matches any saved root or descendant in archives available to
 the current project, including explicitly mapped sources. Restore the whole
 saved family immediately when exactly one archive matches. For multiple matches,
@@ -23,13 +28,14 @@ Keep archive UUID input compatible. Before import, check that the selected
 archive still contains the supplied session ID. Do not widen project scope or
 change saved files, archive identity, or restoration safeguards for this lookup.
 
-Desktop commands must appear in the slash-command list. Use native question
-forms for archive selection and results. Archive and restore run without
+Server commands must appear in both clients' slash-command lists. Use native
+question forms for archive selection and results. Archive and restore run without
 confirmation in both desktop and TUI. Selecting an archive restores it
 immediately; cancelling the archive picker makes no changes. Commands cannot be
 queued. After archiving the open session, the user can open another session from
-the sidebar; restoring makes the original sessions available in the session list
-without automatic navigation.
+the session list; restoring through a slash command makes the original sessions
+available in the session list without automatic navigation. TUI palette archive
+leaves the archived chat, and palette restore opens the restored session.
 
 Storage defaults to `~/.opencode-session-archives` on the connected server and
 remains configurable through `storageDirectory`. Project folders use a readable
@@ -107,11 +113,13 @@ archives, and no import for missing IDs or cancelled or invalid matching
 selections. Server coverage must show filtered summary RPCs, without returning
 transcript bodies or expanding project scope. Desktop coverage must also show
 command registration, cancellable archive selection, native question form
-compatibility, and refusal of a connection to a different server. Desktop
-commands require a managed service registration on their host; standalone and
-embedded servers fail closed. TUI remote connections remain supported. The
+compatibility, and refusal of a connection to a different server. TUI coverage
+must show palette actions with no slash registrations. Slash commands require a
+managed service registration on their host; standalone and embedded servers fail
+closed. TUI palette actions retain remote and standalone support. The
 repository is public; the package remains unpublished on npm. Install the built
 checkout only after the user chooses to enable it. See
 [ADR 0003](adr/0003-immediate-archive-and-restore.md) and
 [ADR 0005](adr/0005-cross-project-session-trees.md) and
-[ADR 0006](adr/0006-explicit-restore-relocations.md).
+[ADR 0006](adr/0006-explicit-restore-relocations.md) and
+[ADR 0007](adr/0007-server-owned-slash-commands.md).

@@ -77,14 +77,13 @@ export default Plugin.define({
     }
 
     async function archive(input?: string): Promise<void> {
-      // V2 slash arguments contain the raw remainder, not the command name.
       const argument = input?.trim();
       const route = context.ui.router.current();
       const sessionID =
         argument || (route.type === 'session' ? route.sessionID : undefined);
       if (!sessionID || !SessionID.safeParse(sessionID).success) {
         throw new Error(
-          'Use /session-archive [sessionID], or open a session first.',
+          'Open a session or provide a valid session ID to archive.',
         );
       }
       // Do not use the TUI's default project or its possibly stale session cache here.
@@ -140,7 +139,7 @@ export default Plugin.define({
         !targetSessionID &&
         !ArchiveID.safeParse(argument).success
       ) {
-        throw new Error('Use /session-restore [sessionID | archiveUUID].');
+        throw new Error('Provide a session ID or archive UUID to restore.');
       }
       const { storage, service, restoreMappings } = await scoped(location);
       let id = targetSessionID ? undefined : argument;
@@ -215,6 +214,8 @@ export default Plugin.define({
       });
     }
 
+    // The server owns slash entries in both clients. TUI entries are palette-only
+    // because OpenCode combines both slash lists without deduplicating names.
     context.keymap.layer(() => ({
       mode: 'global',
       commands: [
@@ -225,7 +226,6 @@ export default Plugin.define({
             'Archive the current session or a session ID, including descendants',
           group: 'Session archives',
           palette: true,
-          slash: { name: 'session-archive', arguments: true },
           run: (input) => operate(() => archive(input)),
         },
         {
@@ -235,7 +235,6 @@ export default Plugin.define({
             'Restore a session ID or archive UUID, or select an archive in the current project',
           group: 'Session archives',
           palette: true,
-          slash: { name: 'session-restore', arguments: true },
           run: (input) => operate(() => restore(input)),
         },
       ],

@@ -167,19 +167,20 @@ async function scenario(pluginURL: string) {
   // The test supplies only host capabilities used by this plugin.
   await plugin.setup(context as unknown as Plugin.Context);
   assert(commands);
-  assert.deepEqual(commands.map((command) => command.slash?.name), [
-    'session-archive',
-    'session-restore',
-  ]);
-  assert(commands.every((command) => !command.slash?.aliases?.length));
+  assert(
+    commands.every((command) => !command.slash),
+    'Only server commands must contribute slash entries',
+  );
   const archive = commands.find(
-    (command) => command.slash?.name === 'session-archive',
+    (command) => command.id === 'simpod.session-archive.archive',
   );
   const restore = commands.find(
-    (command) => command.slash?.name === 'session-restore',
+    (command) => command.id === 'simpod.session-archive.restore',
   );
   assert(archive);
   assert(restore);
+  assert(archive.palette);
+  assert(restore.palette);
   await archive.run();
   assert.equal(state.size, 0);
   assert(savedID);
@@ -319,7 +320,7 @@ async function scenario(pluginURL: string) {
   console.log('Archive and session-ID restore completed without confirmation.');
 }
 
-test('TUI restores by archive, root, descendant, or filtered selection and rejects unsafe choices', async () => {
+test('TUI palette actions restore by archive, root, descendant, or filtered selection without duplicate slash entries', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   const result = await execute(
     process.execPath,
