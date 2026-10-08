@@ -203,21 +203,6 @@ export function desktopCommands(
           throw new Error(
             'The session belongs to another project. Nothing was deleted.',
           );
-        const answer = await host.ask(sessionID, 'Delete session tree?', [
-          {
-            key: 'action',
-            type: 'string',
-            title: 'Permanently delete?',
-            description: `${preview.title} (${target}) and its descendants: ${preview.sessionIDs.length} session(s). Active work will stop. No archive will be saved. This cannot be undone.`,
-            required: true,
-            custom: true,
-            options: [
-              { value: 'cancel', label: 'Cancel' },
-              { value: 'delete', label: 'Delete permanently' },
-            ],
-          },
-        ]);
-        if (answer?.action !== 'delete') return;
         signal.throwIfAborted();
         await service.remove(preview);
         if (!preview.sessionIDs.includes(sessionID)) {

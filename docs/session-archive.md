@@ -16,15 +16,15 @@ by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
 
 Delete means permanent native recursive deletion without archive creation or
-archive-file changes. Without an ID, delete uses the open session. Require an
-explicit confirmation that identifies the target, tree size, lack of backup, and
-stopping of active work. Cancellation makes no changes. Do not apply archive's
+archive-file changes. Without an ID, delete uses the open session. The user
+explicitly approved deletion on submit without confirmation in both slash
+commands and the TUI palette action. Stop active work through native deletion.
+Do not apply archive's
 settled-transcript or import-compatibility restrictions to delete. Keep server
 root-project scope and hosting-instance checks, and use the TUI palette's
-connected client. Include confirmation in the shared operation guard; refuse
-queued commands.
+connected client. Keep the shared operation guard; refuse queued commands.
 
-Recheck the confirmed tree's IDs, parents, projects, locations, and titles before
+Recheck the captured tree's IDs, parents, projects, locations, and titles before
 deletion; refuse changes. Verify that all known IDs are absent after deletion.
 Failures must not claim a backup, successful deletion, or automatic rollback.
 Never attach server results to a deleted session. TUI palette deletion must leave
@@ -45,8 +45,8 @@ archive still contains the supplied session ID. Do not widen project scope or
 change saved files, archive identity, or restoration safeguards for this lookup.
 
 Server commands must appear in both clients' slash-command lists. Use native
-question forms for archive selection, deletion confirmation, and results. Archive and restore run without
-confirmation in both desktop and TUI. Selecting an archive restores it
+question forms for archive selection and results. Archive, restore, and delete
+run without confirmation in both desktop and TUI. Selecting an archive restores it
 immediately; cancelling the archive picker makes no changes. Commands cannot be
 queued. After archiving or deleting the open session, the user can open another session from
 the session list; restoring through a slash command makes the original sessions
@@ -83,7 +83,8 @@ transcripts.
 
 Delete is irreversible and has no backup. Its tree recheck does not lock the
 session family: a descendant created in the final check-to-delete gap can be
-removed without appearing in the confirmation. Disclose this limit and recommend
+removed without appearing in the captured tree. There is no later cancellation
+or approval step. Disclose these limits and recommend
 archive when a transcript must be retained. Never delete real sessions during
 development or validation.
 
@@ -129,13 +130,13 @@ original project location is unavailable or changed. Coverage must include
 mapped roots and descendants, exact source matching, destination preflight and
 post-import verification, unchanged archive files, source-scope isolation, and
 refusal of ambiguous archive IDs. Desktop and TUI coverage must show only the
-three command names, archive and restore without confirmation, and restoration by
-supplied ID or picker selection. Coverage must include lookup by root and
+three command names, archive, restore, and delete without confirmation, and
+restoration by supplied ID or picker selection. Coverage must include lookup by root and
 descendant session IDs, retained UUID input, a matching-only picker for repeated
 archives, and no import for missing IDs or cancelled or invalid matching
 selections. Delete coverage must include current and explicit targets,
-cross-project descendants, confirmation and cancellation, changed-tree refusal,
-scope and lifetime checks, failure reporting, retained archive files, and TUI
+cross-project descendants, immediate deletion without confirmation, changed-tree
+refusal, scope and lifetime checks, failure reporting, retained archive files, and TUI
 navigation and tab cleanup. Server coverage must show filtered summary RPCs,
 without returning transcript bodies or expanding project scope. Desktop coverage must also show
 command registration, cancellable archive selection, native question form
@@ -148,4 +149,5 @@ checkout only after the user chooses to enable it. See
 [ADR 0003](adr/0003-immediate-archive-and-restore.md) and
 [ADR 0005](adr/0005-cross-project-session-trees.md) and
 [ADR 0006](adr/0006-explicit-restore-relocations.md) and
-[ADR 0007](adr/0007-server-owned-slash-commands.md).
+[ADR 0007](adr/0007-server-owned-slash-commands.md) and
+[ADR 0008](adr/0008-immediate-session-deletion.md).

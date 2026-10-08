@@ -13,7 +13,7 @@ export default Plugin.define({
   setup(context) {
     const rpc = context.client.rpc(Archives);
     const lifetime = new AbortController();
-    // Include selection and confirmation in the guard. Never queue destructive UI actions.
+    // Include archive selection in the guard. Never queue destructive UI actions.
     let running = false;
 
     async function operate(run: () => Promise<void>): Promise<void> {
@@ -138,12 +138,6 @@ export default Plugin.define({
         );
       const service = new SessionDelete(gateway(context.client, lifetime.signal));
       const preview = await service.preview(sessionID);
-      const confirmed = await context.ui.dialog.confirm({
-        title: 'Delete session tree?',
-        message: `${preview.title} (${sessionID}) and its descendants: ${preview.sessionIDs.length} session(s). Active work will stop. No archive will be saved. This cannot be undone.`,
-        label: { confirm: 'Delete permanently', cancel: 'Cancel' },
-      });
-      if (!confirmed) return;
       lifetime.signal.throwIfAborted();
       const before = context.ui.router.current();
       const viewingTree =

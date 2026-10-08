@@ -4,7 +4,6 @@ import { SessionID } from './schema.ts';
 
 export interface DeletePreview {
   rootSessionID: string;
-  title: string;
   projectID: string;
   sessionIDs: string[];
   fingerprint: string;
@@ -36,11 +35,10 @@ export class SessionDelete {
     }
     return {
       rootSessionID,
-      title: root.title ?? rootSessionID,
       projectID: root.projectID,
       sessionIDs: family.map((session) => session.id),
-      // Deletion does not preserve transcripts. Active work can continue during
-      // confirmation, but the confirmed tree's identity must not change.
+      // Deletion does not preserve transcripts. Recheck tree identity rather
+      // than blocking deletion when active work changes the transcript.
       fingerprint: fingerprint(
         family.map(({ id, parentID, projectID, location, title }) => ({
           id,
@@ -57,7 +55,7 @@ export class SessionDelete {
     const fresh = await this.preview(preview.rootSessionID);
     if (fresh.fingerprint !== preview.fingerprint)
       throw new Error(
-        'The session family changed after confirmation. Nothing was deleted.',
+        'The session family changed after preview. Nothing was deleted.',
       );
     try {
       await this.#sessions.remove(preview.rootSessionID);

@@ -220,7 +220,7 @@ test('desktop can archive the open session without trying to report to the delet
   assert.deepEqual(f.questions, []);
 });
 
-test('desktop delete confirms the whole tree without an archive and reports only to a surviving session', async (t) => {
+test('desktop delete removes the whole tree immediately without an archive and reports only to a surviving session', async (t) => {
   for (const target of ['ses_owner', 'ses_target'])
     await t.test(target, async () => {
       const f = fixture();
@@ -236,7 +236,6 @@ test('desktop delete confirms the whole tree without an archive and reports only
       f.sessions.messages = async () =>
         assert.fail('Delete must not read transcripts');
       f.sessions.busy = async () => assert.fail('Native delete stops active work');
-      f.answers.push({ action: 'delete' });
       await f.run('session-delete', target === 'ses_owner' ? '' : target);
       assert(!f.state.has(target));
       assert(!f.state.has('ses_child'));
@@ -244,30 +243,14 @@ test('desktop delete confirms the whole tree without an archive and reports only
       assert.equal(f.state.size, 1);
       assert.deepEqual(f.bundles, originalArchives);
       assert.deepEqual(f.events, ['remove']);
-      const question = f.questions[0];
-      assert(question);
-      const field = question.fields[0];
-      assert(field?.type === 'string');
-      assert.match(
-        field.description ?? '',
-        /3 session\(s\).*No archive.*cannot be undone/,
-      );
+      assert.deepEqual(f.questions, []);
       assert.equal(f.reports.length, target === 'ses_owner' ? 0 : 1);
       if (target !== 'ses_owner')
         assert.match(f.reports[0] ?? '', /No archive was saved/);
     });
 });
 
-test('desktop delete cancellation and invalid input make no changes', async (t) => {
-  for (const answer of [undefined, { action: 'cancel' }, { action: 'other' }])
-    await t.test(JSON.stringify(answer) ?? 'dismissed', async () => {
-      const f = fixture();
-      f.answers.push(answer);
-      await f.run('session-delete');
-      assert(f.state.has('ses_owner'));
-      assert.deepEqual(f.events, []);
-      assert.deepEqual(f.bundles, new Map());
-    });
+test('desktop delete invalid input makes no changes', async () => {
   for (const [argument, delivery] of [
     ['invalid', 'steer'],
     ['ses_owner ses_target', 'steer'],
@@ -288,7 +271,7 @@ test('desktop delete cancellation and invalid input make no changes', async (t) 
   assert.deepEqual(f.events, []);
 });
 
-test('desktop delete rechecks the confirmed tree and plugin lifetime before deletion', async (t) => {
+test('desktop delete rechecks the captured tree and plugin lifetime before deletion', async (t) => {
   for (const change of [
     'descendant',
     'project',
@@ -299,8 +282,11 @@ test('desktop delete rechecks the confirmed tree and plugin lifetime before dele
   ])
     await t.test(change, async () => {
       const f = fixture();
-      f.answers.push({ action: 'delete' });
-      f.onAnswer(() => {
+      const get = f.sessions.get;
+      let reads = 0;
+      f.sessions.get = async (id) => {
+        if (id !== 'ses_target' || ++reads !== (change === 'unload' ? 1 : 2))
+          return get(id);
         const target = f.state.get('ses_target');
         assert(target);
         if (change === 'descendant') {
@@ -313,7 +299,8 @@ test('desktop delete rechecks the confirmed tree and plugin lifetime before dele
           target.info.location.directory = '/synthetic/moved';
         else if (change === 'title') target.info.title = 'Renamed';
         else f.abort.abort();
-      });
+        return get(id);
+      };
       await assert.rejects(
         f.run('session-delete', 'ses_target'),
         change === 'unload' ? { name: 'AbortError' } : /family changed/,
@@ -327,7 +314,6 @@ test('desktop delete reports incomplete or unverified deletion without claiming 
   for (const failure of ['remove', 'remaining', 'verification', 'report'])
     await t.test(failure, async () => {
       const f = fixture();
-      f.answers.push({ action: 'delete' });
       if (failure === 'remove')
         f.sessions.remove = async () => {
           throw new Error('Disconnected');

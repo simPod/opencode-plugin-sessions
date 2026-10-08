@@ -49,9 +49,7 @@ async function scenario(pluginURL: string) {
   let beforeSelect: (() => void) | undefined;
   let beforeRead: (() => void) | undefined;
   let selectionGate: Promise<void> | undefined;
-  let confirmed = false;
-  let beforeConfirm: (() => void) | undefined;
-  const confirmations: Array<{ message: string }> = [];
+  let beforeSessionGet: ((sessionID: string) => void) | undefined;
   const tabs: Array<{ sessionID: string }> = [];
   let imports = 0;
   function session(id: string) {
@@ -114,8 +112,10 @@ async function scenario(pluginURL: string) {
         },
       }),
       session: {
-        get: async ({ sessionID }: { sessionID: string }) =>
-          structuredClone(session(sessionID).info),
+        get: async ({ sessionID }: { sessionID: string }) => {
+          beforeSessionGet?.(sessionID);
+          return structuredClone(session(sessionID).info);
+        },
         list: async ({ parentID }: { parentID?: string }) => ({
           data: [...state.values()]
             .filter((item) => !parentID || item.info.parentID === parentID)
@@ -171,11 +171,7 @@ async function scenario(pluginURL: string) {
       },
       toast: { show: (toast: (typeof toasts)[number]) => toasts.push(toast) },
       dialog: {
-        confirm: async (options: { message: string }) => {
-          confirmations.push(options);
-          beforeConfirm?.();
-          return confirmed;
-        },
+        confirm: () => assert.fail('Commands must not request confirmation'),
         select: async (options: { options: readonly { value: string }[] }) => {
           selections.push(options.options);
           beforeSelect?.();
@@ -335,7 +331,7 @@ async function scenario(pluginURL: string) {
   const pending = restore.run();
   await entered;
   try {
-    await restore.run('ses_test');
+    await remove.run('ses_test');
     assert.equal(toasts.at(-1)?.variant, 'warning');
     assert.match(toasts.at(-1)?.message ?? '', /operation is in progress/);
   } finally {
@@ -344,13 +340,11 @@ async function scenario(pluginURL: string) {
     await pending;
   }
   assert.equal(imports, before);
-  assert.equal(confirmations.length, 0);
 
   // Deletion uses the connected client only, leaves archives unchanged, and
   // removes tabs for descendants without closing unrelated sessions.
   const retainedArchives = structuredClone(bundles);
   for (const outcome of [
-    'cancel',
     'changed',
     'delete-current',
     'delete-tree',
@@ -378,10 +372,11 @@ async function scenario(pluginURL: string) {
       sessionID: outcome === 'delete-by-id' ? 'ses_other' : 'ses_child',
     };
     route = initialRoute;
-    confirmed = outcome !== 'cancel';
-    beforeConfirm =
+    let reads = 0;
+    beforeSessionGet =
       outcome === 'changed'
-        ? () => {
+        ? (sessionID) => {
+            if (sessionID !== 'ses_test' || ++reads !== 2) return;
             const added = structuredClone(child);
             added.info.id = 'ses_added';
             state.set('ses_added', added);
@@ -413,40 +408,32 @@ async function scenario(pluginURL: string) {
       assert(state.has('ses_child'));
       assert.deepEqual(route, initialRoute);
       assert.equal(tabs.length, 3);
-      if (outcome === 'changed')
-        assert.match(toasts.at(-1)?.message ?? '', /family changed/);
+      assert.match(toasts.at(-1)?.message ?? '', /family changed/);
     }
     assert.deepEqual(bundles, retainedArchives);
-    assert.match(
-      confirmations.at(-1)?.message ?? '',
-      /Active work will stop.*No archive.*cannot be undone/,
-    );
   }
-  beforeConfirm = undefined;
+  beforeSessionGet = undefined;
   route = { type: 'home' };
-  const confirmationCount = confirmations.length;
   await remove.run();
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
   await remove.run('invalid');
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
-  assert.equal(confirmations.length, confirmationCount);
 
   state.set('ses_test', structuredClone(original));
   const pendingChild = structuredClone(original);
   pendingChild.info.id = 'ses_child';
   pendingChild.info.parentID = 'ses_test';
   state.set('ses_child', pendingChild);
-  confirmed = true;
-  beforeConfirm = () => cleanup();
+  beforeSessionGet = () => cleanup();
   await remove.run('ses_test');
   assert(state.has('ses_test'));
   assert(state.has('ses_child'));
   assert.equal(toasts.at(-1)?.variant, 'error');
   assert.match(toasts.at(-1)?.message ?? '', /aborted/i);
-  console.log('Archive and session-ID restore completed without confirmation.');
+  console.log('Archive, restore, and delete completed without confirmation.');
 }
 
-test('TUI palette actions archive, restore, and confirm deletion without duplicate slash entries', async () => {
+test('TUI palette actions archive, restore, and delete immediately without duplicate slash entries', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   const result = await execute(
     process.execPath,

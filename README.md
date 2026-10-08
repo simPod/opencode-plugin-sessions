@@ -23,8 +23,8 @@ to a model:
   supported. Without an ID, browse the current project's archives and select one
   to restore immediately.
 - `/session-delete [session-id]`: permanently delete the current session, or the
-  supplied ID, and its descendants after confirmation. No archive is saved.
-  Active work is stopped. Existing archive files are not changed.
+  supplied ID, and its descendants immediately, without confirmation. No archive
+  is saved. Active work is stopped. Existing archive files are not changed.
 
 Session-ID lookup searches only archives available to the current project,
 including explicitly mapped source archives. Root and descendant IDs are
@@ -35,32 +35,31 @@ the archive's root and all saved descendants, not only that session.
 `/session-restore` replaces `/session-unarchive` and `/session-archives`. The
 old command names are not aliases. Existing archive files and IDs are unchanged.
 
-Archive and restore run without confirmation in both desktop and TUI. Selecting
-an archive restores it immediately; cancelling the archive picker makes no
-changes. Slash commands use native question panels for archive selection,
-deletion confirmation, and results in both desktop and TUI. Commands run
-immediately and cannot be queued. Result panels require acknowledgement, not
+Archive, restore, and delete run without confirmation in both desktop and TUI.
+Selecting an archive restores it immediately; cancelling the archive picker makes no
+changes. Slash commands use native question panels for archive selection and
+results in both desktop and TUI. Commands run immediately and cannot be queued.
+Result panels require acknowledgement, not
 approval of the completed operation. After archiving or deleting the open session
 through a slash command, open another session from the session list afterward.
 Slash-based restore returns sessions to the list but does not automatically open
 them in either client.
 
-Delete requires confirmation in both desktop and TUI. Its warning identifies the
-session and the number of sessions in its tree. Cancel makes no changes. Unlike
-archive, delete does not need a settled or restorable transcript: it uses native
-deletion, including for active, forked, or reverted sessions. The tree's IDs,
-parent links, projects, locations, and titles are checked again after
-confirmation; changes stop deletion. This check is not atomic with native
-recursive deletion. A new descendant created in that gap can also be deleted.
-Stop other clients and automations if you need the confirmed set to stay fixed.
+Submitting `/session-delete` or running its TUI palette action starts deletion
+without an approval step or a later cancellation step. Unlike archive, delete
+does not need a settled or restorable transcript: it uses native deletion,
+including for active, forked, or reverted sessions. The tree's IDs,
+parent links, projects, locations, and titles are checked again before deletion;
+changes stop deletion. This check is not atomic with native recursive deletion.
+A new descendant created in that gap can also be deleted.
+Stop other clients and automations if you need the captured set to stay fixed.
 There is no backup or automatic recovery. Descendants from other projects are
 also deleted. Use `/session-archive` to keep a restorable transcript.
 
 The TUI command palette retains **Archive session tree**, **Restore session
 archive**, and **Delete session tree permanently** under **Session archives**.
-These actions use TUI dialogs. Archive and delete act on the open session and
-leave the removed chat; restore opens the archive picker and then opens the
-restored session.
+Restore uses a TUI picker and opens the restored session. Archive and delete act
+on the open session and leave the removed chat.
 
 Slash commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its
@@ -197,8 +196,8 @@ damage, not malicious edits by someone who can write the directory.
   messages with the native export and rechecks the whole family immediately
   before deletion. These checks reduce the concurrency risk; they do not remove
   it.
-- Delete removes descendants recursively. Every known descendant must have a
-  verified copy before that operation.
+- Native deletion removes descendants recursively. Archive requires a verified
+  copy of every known descendant first; `/session-delete` makes no backup.
 - Restore refuses existing IDs and missing external parents. Parents are
   imported before children at their original working directories. Before any
   import, every saved directory must pass a fresh server filesystem check and
