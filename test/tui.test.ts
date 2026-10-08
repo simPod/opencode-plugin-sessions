@@ -49,6 +49,10 @@ async function scenario(pluginURL: string) {
   let beforeSelect: (() => void) | undefined;
   let beforeRead: (() => void) | undefined;
   let selectionGate: Promise<void> | undefined;
+  let confirmed = false;
+  let beforeConfirm: (() => void) | undefined;
+  const confirmations: Array<{ message: string }> = [];
+  const tabs: Array<{ sessionID: string }> = [];
   let imports = 0;
   function session(id: string) {
     const item = state.get(id);
@@ -123,7 +127,12 @@ async function scenario(pluginURL: string) {
         export: async ({ sessionID }: { sessionID: string }) =>
           structuredClone(session(sessionID)),
         remove: async ({ sessionID }: { sessionID: string }) => {
-          state.delete(sessionID);
+          const pending = [sessionID];
+          for (const parentID of pending) {
+            for (const item of state.values())
+              if (item.info.parentID === parentID) pending.push(item.info.id);
+            state.delete(parentID);
+          }
         },
         import: async (data: SessionTransferData) => {
           imports++;
@@ -151,10 +160,22 @@ async function scenario(pluginURL: string) {
           route = next;
         },
       },
-      tabs: { enabled: () => false, open: () => {} },
+      tabs: {
+        enabled: () => tabs.length > 0,
+        open: () => {},
+        list: () => [...tabs],
+        close: (sessionID: string) => {
+          const index = tabs.findIndex((tab) => tab.sessionID === sessionID);
+          if (index !== -1) tabs.splice(index, 1);
+        },
+      },
       toast: { show: (toast: (typeof toasts)[number]) => toasts.push(toast) },
       dialog: {
-        confirm: () => assert.fail('Confirmation must not be requested'),
+        confirm: async (options: { message: string }) => {
+          confirmations.push(options);
+          beforeConfirm?.();
+          return confirmed;
+        },
         select: async (options: { options: readonly { value: string }[] }) => {
           selections.push(options.options);
           beforeSelect?.();
@@ -165,11 +186,13 @@ async function scenario(pluginURL: string) {
     },
   };
   // The test supplies only host capabilities used by this plugin.
-  await plugin.setup(context as unknown as Plugin.Context);
+  const cleanup = await plugin.setup(context as unknown as Plugin.Context);
+  assert(typeof cleanup === 'function');
   assert(commands);
   assert.deepEqual(commands.map((command) => command.slash?.name), [
     'session-archive',
     'session-restore',
+    'session-delete',
   ]);
   assert(commands.every((command) => !command.slash?.aliases?.length));
   const archive = commands.find(
@@ -178,8 +201,12 @@ async function scenario(pluginURL: string) {
   const restore = commands.find(
     (command) => command.slash?.name === 'session-restore',
   );
+  const remove = commands.find(
+    (command) => command.slash?.name === 'session-delete',
+  );
   assert(archive);
   assert(restore);
+  assert(remove);
   await archive.run();
   assert.equal(state.size, 0);
   assert(savedID);
@@ -316,10 +343,109 @@ async function scenario(pluginURL: string) {
     await pending;
   }
   assert.equal(imports, before);
+  assert.equal(confirmations.length, 0);
+
+  // Deletion uses the connected client only, leaves archives unchanged, and
+  // removes tabs for descendants without closing unrelated sessions.
+  const retainedArchives = structuredClone(bundles);
+  for (const outcome of [
+    'cancel',
+    'changed',
+    'delete-current',
+    'delete-tree',
+    'delete-by-id',
+  ]) {
+    state.clear();
+    state.set('ses_test', structuredClone(original));
+    const child = structuredClone(original);
+    child.info.id = 'ses_child';
+    child.info.parentID = 'ses_test';
+    child.info.projectID = 'foreign-project';
+    state.set('ses_child', child);
+    const unrelated = structuredClone(original);
+    unrelated.info.id = 'ses_other';
+    state.set('ses_other', unrelated);
+    tabs.splice(
+      0,
+      tabs.length,
+      { sessionID: 'ses_test' },
+      { sessionID: 'ses_child' },
+      { sessionID: 'ses_other' },
+    );
+    const initialRoute = {
+      type: 'session' as const,
+      sessionID: outcome === 'delete-by-id' ? 'ses_other' : 'ses_child',
+    };
+    route = initialRoute;
+    confirmed = outcome !== 'cancel';
+    beforeConfirm =
+      outcome === 'changed'
+        ? () => {
+            const added = structuredClone(child);
+            added.info.id = 'ses_added';
+            state.set('ses_added', added);
+          }
+        : undefined;
+    // Current-session deletion can target a child without deleting its parent.
+    const argument = outcome === 'delete-current' ? undefined : 'ses_test';
+    await remove.run(argument);
+    if (
+      outcome === 'delete-current' ||
+      outcome === 'delete-tree' ||
+      outcome === 'delete-by-id'
+    ) {
+      assert(!state.has('ses_child'));
+      assert.equal(state.has('ses_test'), outcome === 'delete-current');
+      assert(state.has('ses_other'));
+      assert.deepEqual(
+        route,
+        outcome === 'delete-by-id' ? initialRoute : { type: 'home' },
+      );
+      assert.deepEqual(
+        tabs.map((tab) => tab.sessionID),
+        outcome === 'delete-current' ? ['ses_test', 'ses_other'] : ['ses_other'],
+      );
+      assert.equal(toasts.at(-1)?.title, 'Session tree deleted');
+      assert.equal(toasts.at(-1)?.variant, 'success');
+    } else {
+      assert(state.has('ses_test'));
+      assert(state.has('ses_child'));
+      assert.deepEqual(route, initialRoute);
+      assert.equal(tabs.length, 3);
+      if (outcome === 'changed')
+        assert.match(toasts.at(-1)?.message ?? '', /family changed/);
+    }
+    assert.deepEqual(bundles, retainedArchives);
+    assert.match(
+      confirmations.at(-1)?.message ?? '',
+      /Active work will stop.*No archive.*cannot be undone/,
+    );
+  }
+  beforeConfirm = undefined;
+  route = { type: 'home' };
+  const confirmationCount = confirmations.length;
+  await remove.run();
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
+  await remove.run('invalid');
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
+  assert.equal(confirmations.length, confirmationCount);
+
+  state.set('ses_test', structuredClone(original));
+  const pendingChild = structuredClone(original);
+  pendingChild.info.id = 'ses_child';
+  pendingChild.info.parentID = 'ses_test';
+  state.set('ses_child', pendingChild);
+  confirmed = true;
+  beforeConfirm = () => cleanup();
+  await remove.run('ses_test');
+  assert(state.has('ses_test'));
+  assert(state.has('ses_child'));
+  assert.equal(toasts.at(-1)?.variant, 'error');
+  assert.match(toasts.at(-1)?.message ?? '', /aborted/i);
   console.log('Archive and session-ID restore completed without confirmation.');
 }
 
-test('TUI restores by archive, root, descendant, or filtered selection and rejects unsafe choices', async () => {
+test('TUI archives, restores by ID or selection, and confirms deletion with tab cleanup', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   const result = await execute(
     process.execPath,

@@ -2,7 +2,7 @@
 
 An OpenCode V2 plugin that saves session transcripts to private JSON files, then
 deletes the live sessions. Restoring an archive imports the original session IDs
-and messages.
+and messages. It can also permanently delete a session tree without an archive.
 
 **Archive deletion is not atomic.** OpenCode V2 has no public session lock or
 compare-and-delete operation. Before running an archive, stop other clients and
@@ -21,6 +21,9 @@ command-palette entries. It does not submit prompts to a model:
   the supplied session ID, including the whole saved family. Archive UUIDs remain
   supported. Without an ID, browse the current project's archives and select one
   to restore immediately.
+- `/session-delete [session-id]`: permanently delete the current session, or the
+  supplied ID, and its descendants after confirmation. No archive is saved.
+  Active work is stopped. Existing archive files are not changed.
 
 Session-ID lookup searches only archives available to the current project,
 including explicitly mapped source archives. Root and descendant IDs are
@@ -33,11 +36,23 @@ old command names are not aliases. Existing archive files and IDs are unchanged.
 
 Archive and restore run without confirmation in both desktop and TUI. Selecting
 an archive restores it immediately; cancelling the archive picker makes no
-changes. Desktop commands use native question panels for archive selection and
-results. Commands run immediately and cannot be queued. Result panels require
-acknowledgement, not approval of the completed operation. When archiving the
-open session, open another session from the sidebar afterward. Restore returns
-the sessions to the list; it does not automatically open them in desktop.
+changes. Desktop commands use native question panels for archive selection,
+deletion confirmation, and results. Commands cannot be queued. Result panels
+require acknowledgement, not approval of the completed operation. After archiving
+or deleting the open session, open another session from the sidebar afterward.
+Restore returns the sessions to the list; it does not automatically open them in
+desktop.
+
+Delete requires confirmation in both desktop and TUI. Its warning identifies the
+session and the number of sessions in its tree. Cancel makes no changes. Unlike
+archive, delete does not need a settled or restorable transcript: it uses native
+deletion, including for active, forked, or reverted sessions. The tree's IDs,
+parent links, projects, locations, and titles are checked again after
+confirmation; changes stop deletion. This check is not atomic with native
+recursive deletion. A new descendant created in that gap can also be deleted.
+Stop other clients and automations if you need the confirmed set to stay fixed.
+There is no backup or automatic recovery. Descendants from other projects are
+also deleted. Use `/session-archive` to keep a restorable transcript.
 
 Desktop commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its
@@ -51,7 +66,7 @@ local server. This also supports a remote OpenCode server: archive files are
 stored on that server. Desktop commands also work when connected to a remote
 managed server; its service registration is read on that server, not the desktop
 machine. The plugin does not add custom desktop buttons. Successful TUI deletion
-leaves the archived chat; TUI restoration opens it.
+leaves the archived or deleted chat; TUI restoration opens it.
 
 ## Install
 

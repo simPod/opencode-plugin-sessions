@@ -89,7 +89,7 @@ test('server plugin uses its home-directory default and honors explicit storage 
         return { dispose: async () => {} };
       } },
     });
-    assert.deepEqual(commands.sort(), ['session-archive', 'session-restore']);
+    assert.deepEqual(commands.sort(), ['session-archive', 'session-delete', 'session-restore']);
   `;
   const cases = [
     {

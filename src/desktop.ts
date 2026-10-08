@@ -1,5 +1,6 @@
 import type { CommandDefinition } from '@opencode/plugin/promise/command';
 import type { DesktopHost } from './desktop-client.ts';
+import { SessionDelete } from './delete.ts';
 import { fingerprint } from './fingerprint.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -34,15 +35,13 @@ export function desktopCommands(
       description,
       async execute({ sessionID, prompt, delivery }) {
         if (running)
-          throw new Error(
-            'Another archive or restore operation is in progress.',
-          );
+          throw new Error('Another session operation is in progress.');
         running = true;
         try {
           signal.throwIfAborted();
           if (delivery === 'queue')
             throw new Error(
-              'Session archive commands run immediately and cannot be queued.',
+              'Session commands run immediately and cannot be queued.',
             );
           if (
             prompt.files?.length ||
@@ -50,7 +49,7 @@ export function desktopCommands(
             prompt.skills?.length
           )
             throw new Error(
-              'Session archive commands do not accept attachments or mentions.',
+              'Session commands do not accept attachments or mentions.',
             );
           const host = await connect();
           const session = await host.sessions.get(sessionID);
@@ -190,6 +189,51 @@ export function desktopCommands(
       'session-restore',
       'Restore a session ID or archive UUID, or select an archive from this project',
       restore,
+    ),
+    command(
+      'session-delete',
+      'Permanently delete a session tree without saving an archive',
+      async (host, sessionID, argument) => {
+        const target = argument || sessionID;
+        if (!SessionID.safeParse(target).success)
+          throw new Error('Use /session-delete [sessionID].');
+        const service = new SessionDelete(host.sessions);
+        const preview = await service.preview(target);
+        if (preview.projectID !== projectID)
+          throw new Error(
+            'The session belongs to another project. Nothing was deleted.',
+          );
+        const answer = await host.ask(sessionID, 'Delete session tree?', [
+          {
+            key: 'action',
+            type: 'string',
+            title: 'Permanently delete?',
+            description: `${preview.title} (${target}) and its descendants: ${preview.sessionIDs.length} session(s). Active work will stop. No archive will be saved. This cannot be undone.`,
+            required: true,
+            custom: true,
+            options: [
+              { value: 'cancel', label: 'Cancel' },
+              { value: 'delete', label: 'Delete permanently' },
+            ],
+          },
+        ]);
+        if (answer?.action !== 'delete') return;
+        signal.throwIfAborted();
+        await service.remove(preview);
+        if (!preview.sessionIDs.includes(sessionID)) {
+          try {
+            await host.report(
+              sessionID,
+              'Session tree deleted',
+              `${preview.sessionIDs.length} session(s) permanently deleted. No archive was saved.`,
+            );
+          } catch {
+            throw new Error(
+              'The tree was deleted, but the desktop result could not be shown. No archive was saved.',
+            );
+          }
+        }
+      },
     ),
   ];
 }

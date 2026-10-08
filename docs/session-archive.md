@@ -3,16 +3,32 @@
 ## Goal
 
 Remove completed conversations from the live OpenCode session list while keeping
-their transcripts available for later restoration.
+their transcripts available for later restoration, or permanently delete unwanted
+session trees without keeping a transcript.
 
 ## Behavior
 
-Provide two desktop and TUI slash commands: `/session-archive [session-id]` and
-`/session-restore [session-id | archive-id]`. Without an ID, restore opens the
-current project's archive picker. Remove `/session-unarchive` and
+Provide three desktop and TUI slash commands: `/session-archive [session-id]`,
+`/session-restore [session-id | archive-id]`, and `/session-delete [session-id]`.
+Without an ID, restore opens the current project's archive picker. Remove `/session-unarchive` and
 `/session-archives` without aliases. Archive means verified JSON export followed
 by recursive native deletion. Restore means native import with original IDs,
 parents first. These commands must not invoke a model.
+
+Delete means permanent native recursive deletion without archive creation or
+archive-file changes. Without an ID, delete uses the open session. Require an
+explicit confirmation that identifies the target, tree size, lack of backup, and
+stopping of active work. Cancellation makes no changes. Do not apply archive's
+settled-transcript or import-compatibility restrictions to delete. Keep desktop
+root-project scope and hosting-instance checks, and use the TUI's connected
+client. Include confirmation in the shared operation guard; refuse queued
+commands.
+
+Recheck the confirmed tree's IDs, parents, projects, locations, and titles before
+deletion; refuse changes. Verify that all known IDs are absent after deletion.
+Failures must not claim a backup, successful deletion, or automatic rollback.
+Never attach desktop results to a deleted session. TUI deletion must leave a
+deleted current tree and close its tabs without closing unrelated tabs.
 
 Session-ID lookup matches any saved root or descendant in archives available to
 the current project, including explicitly mapped sources. Restore the whole
@@ -58,8 +74,14 @@ transcripts.
 
 ## Safety requirements
 
-The user explicitly approved removing archive and restore confirmations. Refuse
-busy, queued, incomplete, forked, or reverted session families. Save the
+Delete is irreversible and has no backup. Its tree recheck does not lock the
+session family: a descendant created in the final check-to-delete gap can be
+removed without appearing in the confirmation. Disclose this limit and recommend
+archive when a transcript must be retained. Never delete real sessions during
+development or validation.
+
+The user explicitly approved removing archive and restore confirmations. Archive
+must refuse busy, queued, incomplete, forked, or reverted session families. Save the
 complete settled transcript of every descendant privately and verify it before
 deletion. Abort when the captured family changes.
 
@@ -100,12 +122,15 @@ original project location is unavailable or changed. Coverage must include
 mapped roots and descendants, exact source matching, destination preflight and
 post-import verification, unchanged archive files, source-scope isolation, and
 refusal of ambiguous archive IDs. Desktop and TUI coverage must show only the
-two command names, archive and restore without confirmation, and restoration by
+three command names, archive and restore without confirmation, and restoration by
 supplied ID or picker selection. Coverage must include lookup by root and
 descendant session IDs, retained UUID input, a matching-only picker for repeated
 archives, and no import for missing IDs or cancelled or invalid matching
-selections. Server coverage must show filtered summary RPCs, without returning
-transcript bodies or expanding project scope. Desktop coverage must also show
+selections. Delete coverage must include current and explicit targets,
+cross-project descendants, confirmation and cancellation, changed-tree refusal,
+scope and lifetime checks, failure reporting, retained archive files, and TUI
+navigation and tab cleanup. Server coverage must show filtered summary RPCs,
+without returning transcript bodies or expanding project scope. Desktop coverage must also show
 command registration, cancellable archive selection, native question form
 compatibility, and refusal of a connection to a different server. Desktop
 commands require a managed service registration on their host; standalone and

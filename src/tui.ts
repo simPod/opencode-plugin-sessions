@@ -1,5 +1,6 @@
 import type { LocationRef } from '@opencode/client';
 import { Plugin } from '@opencode/plugin/tui';
+import { SessionDelete } from './delete.ts';
 import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
 import { Archives } from './rpc.ts';
@@ -11,13 +12,14 @@ export default Plugin.define({
   id: 'simpod-sessions-tui',
   setup(context) {
     const rpc = context.client.rpc(Archives);
-    // Include archive selection in the guard. Never queue destructive UI actions.
+    const lifetime = new AbortController();
+    // Include selection and confirmation in the guard. Never queue destructive UI actions.
     let running = false;
 
     async function operate(run: () => Promise<void>): Promise<void> {
       if (running) {
         context.ui.toast.show({
-          message: 'Another archive or restore operation is in progress.',
+          message: 'Another session operation is in progress.',
           variant: 'warning',
         });
         return;
@@ -27,11 +29,11 @@ export default Plugin.define({
         await run();
       } catch (error) {
         context.ui.toast.show({
-          title: 'Session archive',
+          title: 'Session operation',
           message:
             error instanceof Error
               ? error.message
-              : 'The archive operation failed.',
+              : 'The session operation failed.',
           variant: 'error',
         });
       } finally {
@@ -101,25 +103,57 @@ export default Plugin.define({
         before.type === 'session' &&
         preview.sessionIDs.includes(before.sessionID);
       const saved = await service.archive(preview);
+      leaveDeletedTree(preview.sessionIDs, viewingTree);
+      context.ui.toast.show({
+        title: 'Session tree archived',
+        message: `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
+        variant: 'success',
+      });
+    }
+
+    function leaveDeletedTree(sessionIDs: string[], viewingTree: boolean): void {
       // Native session.deleted events remove cached sessions and may already close tabs.
       // Navigate before our tab cleanup so it cannot focus another deleted tree member.
       const current = context.ui.router.current();
       if (
         viewingTree ||
-        (current.type === 'session' &&
-          preview.sessionIDs.includes(current.sessionID))
+        (current.type === 'session' && sessionIDs.includes(current.sessionID))
       ) {
         context.ui.router.navigate({ type: 'home' });
       }
       if (context.ui.tabs.enabled()) {
-        const deleted = new Set(preview.sessionIDs);
+        const deleted = new Set(sessionIDs);
         for (const tab of context.ui.tabs.list()) {
           if (deleted.has(tab.sessionID)) context.ui.tabs.close(tab.sessionID);
         }
       }
+    }
+
+    async function remove(input?: string): Promise<void> {
+      const route = context.ui.router.current();
+      const sessionID =
+        input?.trim() || (route.type === 'session' ? route.sessionID : undefined);
+      if (!sessionID || !SessionID.safeParse(sessionID).success)
+        throw new Error(
+          'Use /session-delete [sessionID], or open a session first.',
+        );
+      const service = new SessionDelete(gateway(context.client, lifetime.signal));
+      const preview = await service.preview(sessionID);
+      const confirmed = await context.ui.dialog.confirm({
+        title: 'Delete session tree?',
+        message: `${preview.title} (${sessionID}) and its descendants: ${preview.sessionIDs.length} session(s). Active work will stop. No archive will be saved. This cannot be undone.`,
+        label: { confirm: 'Delete permanently', cancel: 'Cancel' },
+      });
+      if (!confirmed) return;
+      lifetime.signal.throwIfAborted();
+      const before = context.ui.router.current();
+      const viewingTree =
+        before.type === 'session' && preview.sessionIDs.includes(before.sessionID);
+      await service.remove(preview);
+      leaveDeletedTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
-        title: 'Session tree archived',
-        message: `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
+        title: 'Session tree deleted',
+        message: `${preview.sessionIDs.length} session(s) permanently deleted. No archive was saved.`,
         variant: 'success',
       });
     }
@@ -238,7 +272,18 @@ export default Plugin.define({
           slash: { name: 'session-restore', arguments: true },
           run: (input) => operate(() => restore(input)),
         },
+        {
+          id: 'simpod.session-archive.delete',
+          title: 'Delete session tree permanently',
+          description:
+            'Delete the current session or a session ID and its descendants without an archive',
+          group: 'Session archives',
+          palette: true,
+          slash: { name: 'session-delete', arguments: true },
+          run: (input) => operate(() => remove(input)),
+        },
       ],
     }));
+    return () => lifetime.abort();
   },
 });

@@ -116,7 +116,12 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
       },
       async remove(id) {
         events.push('remove');
-        state.delete(id);
+        const pending = [id];
+        for (const parentID of pending) {
+          for (const item of state.values())
+            if (item.info.parentID === parentID) pending.push(item.info.id);
+          state.delete(parentID);
+        }
       },
       async import(data) {
         events.push('import');
@@ -182,6 +187,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     events,
     lookups,
     abort,
+    sessions: host.sessions,
     archived,
     onAnswer(callback: () => void) {
       beforeAnswer = callback;
@@ -212,6 +218,135 @@ test('desktop can archive the open session without trying to report to the delet
   assert.deepEqual(f.events, ['save', 'remove']);
   assert.deepEqual(f.reports, []);
   assert.deepEqual(f.questions, []);
+});
+
+test('desktop delete confirms the whole tree without an archive and reports only to a surviving session', async (t) => {
+  for (const target of ['ses_owner', 'ses_target'])
+    await t.test(target, async () => {
+      const f = fixture();
+      f.archived();
+      const originalArchives = structuredClone(f.bundles);
+      const child = transfer('ses_child', 'project-b');
+      child.info.parentID = target;
+      f.state.set('ses_child', child);
+      const grandchild = transfer('ses_grandchild', 'global');
+      grandchild.info.parentID = 'ses_child';
+      f.state.set('ses_grandchild', grandchild);
+      f.sessions.export = async () => assert.fail('Delete must not export');
+      f.sessions.messages = async () =>
+        assert.fail('Delete must not read transcripts');
+      f.sessions.busy = async () => assert.fail('Native delete stops active work');
+      f.answers.push({ action: 'delete' });
+      await f.run('session-delete', target === 'ses_owner' ? '' : target);
+      assert(!f.state.has(target));
+      assert(!f.state.has('ses_child'));
+      assert(!f.state.has('ses_grandchild'));
+      assert.equal(f.state.size, 1);
+      assert.deepEqual(f.bundles, originalArchives);
+      assert.deepEqual(f.events, ['remove']);
+      const question = f.questions[0];
+      assert(question);
+      const field = question.fields[0];
+      assert(field?.type === 'string');
+      assert.match(
+        field.description ?? '',
+        /3 session\(s\).*No archive.*cannot be undone/,
+      );
+      assert.equal(f.reports.length, target === 'ses_owner' ? 0 : 1);
+      if (target !== 'ses_owner')
+        assert.match(f.reports[0] ?? '', /No archive was saved/);
+    });
+});
+
+test('desktop delete cancellation and invalid input make no changes', async (t) => {
+  for (const answer of [undefined, { action: 'cancel' }, { action: 'other' }])
+    await t.test(JSON.stringify(answer) ?? 'dismissed', async () => {
+      const f = fixture();
+      f.answers.push(answer);
+      await f.run('session-delete');
+      assert(f.state.has('ses_owner'));
+      assert.deepEqual(f.events, []);
+      assert.deepEqual(f.bundles, new Map());
+    });
+  for (const [argument, delivery] of [
+    ['invalid', 'steer'],
+    ['ses_owner ses_target', 'steer'],
+    ['', 'queue'],
+  ] as const) {
+    const f = fixture();
+    await assert.rejects(
+      f.run('session-delete', argument, delivery),
+      delivery === 'queue' ? /cannot be queued/ : /Use \/session-delete/,
+    );
+    assert.deepEqual(f.questions, []);
+    assert.deepEqual(f.events, []);
+  }
+  const f = fixture();
+  f.state.set('ses_foreign', transfer('ses_foreign', 'project-b'));
+  await assert.rejects(f.run('session-delete', 'ses_foreign'), /another project/);
+  assert.deepEqual(f.questions, []);
+  assert.deepEqual(f.events, []);
+});
+
+test('desktop delete rechecks the confirmed tree and plugin lifetime before deletion', async (t) => {
+  for (const change of [
+    'descendant',
+    'project',
+    'parent',
+    'location',
+    'title',
+    'unload',
+  ])
+    await t.test(change, async () => {
+      const f = fixture();
+      f.answers.push({ action: 'delete' });
+      f.onAnswer(() => {
+        const target = f.state.get('ses_target');
+        assert(target);
+        if (change === 'descendant') {
+          const child = transfer('ses_child');
+          child.info.parentID = 'ses_target';
+          f.state.set('ses_child', child);
+        } else if (change === 'project') target.info.projectID = 'project-b';
+        else if (change === 'parent') target.info.parentID = 'ses_owner';
+        else if (change === 'location')
+          target.info.location.directory = '/synthetic/moved';
+        else if (change === 'title') target.info.title = 'Renamed';
+        else f.abort.abort();
+      });
+      await assert.rejects(
+        f.run('session-delete', 'ses_target'),
+        change === 'unload' ? { name: 'AbortError' } : /family changed/,
+      );
+      assert(f.state.has('ses_target'));
+      assert.deepEqual(f.events, []);
+    });
+});
+
+test('desktop delete reports incomplete or unverified deletion without claiming a backup', async (t) => {
+  for (const failure of ['remove', 'remaining', 'verification', 'report'])
+    await t.test(failure, async () => {
+      const f = fixture();
+      f.answers.push({ action: 'delete' });
+      if (failure === 'remove')
+        f.sessions.remove = async () => {
+          throw new Error('Disconnected');
+        };
+      else if (failure === 'remaining') f.sessions.remove = async () => {};
+      else if (failure === 'verification')
+        f.sessions.existing = async () => {
+          throw new Error('Disconnected');
+        };
+      else f.failReport();
+      await assert.rejects(
+        f.run('session-delete', 'ses_target'),
+        failure === 'report'
+          ? /was deleted.*No archive was saved/
+          : /Deletion.*No backup was created/,
+      );
+      assert.deepEqual(f.bundles, new Map());
+      assert.deepEqual(f.reports, []);
+    });
 });
 
 test('desktop restore by archive, root, or descendant ID imports the whole tree without a picker', async (t) => {
@@ -395,7 +530,7 @@ test('desktop refuses a second operation while another command waits for archive
   const pending = f.run('session-restore');
   await entered;
   try {
-    await assert.rejects(f.run('session-restore'), /operation is in progress/);
+    await assert.rejects(f.run('session-delete'), /operation is in progress/);
   } finally {
     release();
     await pending;
