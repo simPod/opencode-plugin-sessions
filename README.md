@@ -23,7 +23,7 @@ to a model:
 - `/session-restore [session-id | archive-id]`: restore the archive that contains
   the supplied session ID, including the whole saved family. Archive UUIDs remain
   supported. Without an ID, browse the current project's archives and select one
-  to restore immediately.
+  to restore immediately. Archives are listed by archive date, newest first.
 - `/session-delete [session-id]`: permanently delete the current session, or the
   supplied ID, and its descendants immediately, without confirmation. No archive
   is saved. Active work is stopped. Existing archive files are not changed.

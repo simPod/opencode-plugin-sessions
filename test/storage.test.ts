@@ -142,6 +142,50 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
   assert.equal((await stat(saved.path)).mode & 0o777, 0o600);
 });
 
+test('archive lists use archive date descending across primary and mapped storage', async (t) => {
+  const { storage, storageDirectory } = await fixture(t);
+  const oldest = bundle('project-a', '00000000-0000-4000-8000-000000000001');
+  const newest = bundle('project-a', '00000000-0000-4000-8000-000000000002');
+  newest.createdAt = oldest.createdAt + 2;
+  await storage.save(newest);
+  await storage.save(oldest);
+
+  const source = new FileArchiveStorage({
+    storageDirectory,
+    projectID: 'project-old',
+    projectName: 'Old project',
+  });
+  const middle = bundle(
+    'project-old',
+    '00000000-0000-4000-8000-000000000003',
+    '/synthetic/old',
+  );
+  middle.createdAt = oldest.createdAt + 1;
+  await source.save(middle);
+  const view = restoreStorage(storage, {
+    storageDirectory,
+    projectID: 'project-a',
+    directory: '/synthetic/project',
+    restoreMappings: [
+      {
+        from: { projectID: 'project-old', directory: '/synthetic/old' },
+        to: { projectID: 'project-a', directory: '/synthetic/project' },
+      },
+    ],
+  });
+  for (const sessionID of [undefined, 'ses_fixture']) {
+    assert.deepEqual((await storage.list(sessionID)).map(({ id }) => id), [
+      newest.id,
+      oldest.id,
+    ]);
+    assert.deepEqual((await view.list(sessionID)).map(({ id }) => id), [
+      newest.id,
+      middle.id,
+      oldest.id,
+    ]);
+  }
+});
+
 test('restore discovery admits only exact mapped roots and deduplicates shared Git folders', async (t) => {
   const { storage, storageDirectory } = await fixture(t);
   const first = await storage.save(bundle());
