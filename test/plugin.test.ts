@@ -191,3 +191,75 @@ test('server plugin uses its home-directory default and honors explicit storage 
     });
   await assert.rejects(readdir(join(home, 'xdg')), { code: 'ENOENT' });
 });
+
+test('server worktree RPC inspects server paths and binds recovery to the selected mapped archive', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'session-plugin-rpc-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = `
+    import { strict as assert } from 'node:assert';
+    import { join } from 'node:path';
+    import { writeFile } from 'node:fs/promises';
+    import plugin from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+    import { fingerprint } from ${JSON.stringify(new URL('../src/fingerprint.ts', import.meta.url).href)};
+    const directory = process.env.RPC_DIRECTORY;
+    const old = { projectID: 'old-project', directory: '/synthetic/old-worktree' };
+    const target = { projectID: 'server-project', directory: join(directory, 'missing-worktree') };
+    let handlers;
+    const dispose = await plugin.setup({
+      options: { storageDirectory: join(directory, 'archives'), restoreMappings: [{ from: old, to: target }] },
+      location: { directory: target.directory, project: { id: 'server-project', canonical: directory } },
+      rpc: { register: async (_definition, registered) => { handlers = registered; return { dispose: async () => {} }; } },
+      command: { transform: async register => { register({ add: () => {} }); return { dispose: async () => {} }; } },
+    });
+    try {
+      const present = { projectID: 'server-project', directory };
+      assert.deepEqual(await handlers.worktreeCapture({ locations: [present] }), []);
+      assert.deepEqual(await handlers.worktreeMissing({ locations: [present, target] }), [target]);
+      const bundle = {
+        format: 'opencode-session-archive', version: 2, worktrees: [],
+        id: 'db67c1d5-89e7-45c0-b2fa-636df671623c', createdAt: 3,
+        projectID: old.projectID, rootSessionID: 'ses_archived',
+        sessions: [{ info: {
+          id: 'ses_archived', projectID: old.projectID, title: 'Archived', location: { directory: old.directory },
+          cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1, updated: 2 },
+        }, messages: [] }],
+      };
+      // Save to the source project's archive storage, as a mapped archive would be.
+      const { FileArchiveStorage } = await import(${JSON.stringify(new URL('../src/storage.ts', import.meta.url).href)});
+      const sourceStorage = new FileArchiveStorage({
+        storageDirectory: join(directory, 'archives'), projectID: old.projectID,
+        projectName: 'old-worktree', projectDirectory: old.directory,
+      });
+      const saved = await sourceStorage.save(bundle);
+      assert.deepEqual(await handlers.read({ id: bundle.id }), bundle);
+      const archive = { id: bundle.id, fingerprint: fingerprint(bundle) };
+      const source = { repository: join(directory, 'unavailable-repository'), worktree: target.directory };
+      const request = { ...target, ...source, ref: 'feature/session' };
+      const plan = { ...target, ...source, commit: 'c'.repeat(40) };
+      for (const [method, field, payload] of [
+        ['worktreePrepare', 'request', request], ['worktreeRecreate', 'plan', plan],
+      ]) {
+        await assert.rejects(handlers[method]({ archive: { ...archive, fingerprint: '0'.repeat(64) }, [field]: payload }), /archive changed after inspection/);
+        await assert.rejects(handlers[method]({ archive, [field]: { ...payload, directory: join(directory, 'unrelated') } }), /must belong to the selected archive/);
+        await assert.rejects(handlers[method]({ archive, [field]: { ...payload, ...old } }), /must belong to the selected archive/);
+        // Matching mapped targets pass the archive guard and reach server Git validation.
+        await assert.rejects(handlers[method]({ archive, [field]: payload }), /source repository is unavailable/);
+      }
+      const changed = { ...bundle, createdAt: 4 };
+      await writeFile(saved.path, JSON.stringify({ checksum: fingerprint(changed), bundle: changed }));
+      await assert.rejects(handlers.worktreeRecreate({ archive, plan }), /archive changed after inspection/);
+      assert.deepEqual(await handlers.worktreeMissing({ locations: [target] }), [target]);
+    } finally {
+      await dispose();
+    }
+  `;
+  await execute(
+    process.execPath,
+    ['--experimental-strip-types', '--input-type=module', '-e', script],
+    {
+      env: { ...process.env, RPC_DIRECTORY: directory },
+      timeout: 10_000,
+    },
+  );
+});

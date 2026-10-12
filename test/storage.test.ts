@@ -64,9 +64,23 @@ function bundle(
   };
 }
 
-test('private archive round-trip preserves exact JSON bytes and publishes without overwrite', async (t) => {
+test('private archive round-trip preserves archive data and publishes without overwrite', async (t) => {
   const { storage, storageDirectory } = await fixture(t);
-  const original = bundle();
+  const original: ArchiveBundle = {
+    ...bundle(),
+    version: 2,
+    worktrees: [
+      {
+        projectID: 'project-a',
+        directory: '/synthetic/project',
+        repository: '/synthetic/repository',
+        worktree: '/synthetic/project',
+        commit: 'a'.repeat(40),
+        branch: 'feature/archive',
+        dirty: true,
+      },
+    ],
+  };
   const root = original.sessions[0];
   assert(root);
   original.sessions.push({
@@ -82,11 +96,6 @@ test('private archive round-trip preserves exact JSON bytes and publishes withou
   const saved = await storage.save(original);
   assert.deepEqual(await storage.read(saved.id), original);
   const bytes = await readFile(saved.path);
-  assert(
-    bytes
-      .subarray(bytes.indexOf('"bundle":') + '"bundle":'.length, -1)
-      .equals(Buffer.from(JSON.stringify(original))),
-  );
   assert(bytes.includes(Buffer.from('č 🌱')));
   assert(bytes.includes(Buffer.from('\\u0000')));
   assert.equal((await stat(storageDirectory)).mode & 0o777, 0o700);

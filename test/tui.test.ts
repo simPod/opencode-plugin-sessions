@@ -110,6 +110,8 @@ async function scenario(pluginURL: string) {
           bundles.set(item.id, item);
           return { id: item.id, path: '/synthetic/archive.json' };
         },
+        worktreeCapture: async () => [],
+        worktreeMissing: async () => [],
       }),
       session: {
         get: async ({ sessionID }: { sessionID: string }) => {
@@ -441,4 +443,146 @@ test('TUI palette actions archive, restore, and delete immediately without dupli
     { timeout: 5_000 },
   );
   assert.match(result.stdout, /completed without confirmation/);
+});
+
+test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit confirmation', async (t) => {
+  const script = `
+    import { strict as assert } from 'node:assert';
+    import plugin from ${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)};
+    import { fingerprint } from ${JSON.stringify(new URL('../src/fingerprint.ts', import.meta.url).href)};
+    const scenario = process.env.RECOVERY_SCENARIO;
+    const location = { directory: '/synthetic/worktree/app' };
+    const target = { projectID: 'test-project', directory: location.directory };
+    const snapshot = { ...target, repository: '/synthetic/source', worktree: '/synthetic/worktree',
+      commit: 'b'.repeat(40), branch: 'archived-branch', dirty: true };
+    const bundle = {
+      format: 'opencode-session-archive', version: scenario === 'saved' ? 2 : 1,
+      id: 'f29e8df0-88b2-4d1b-b0fc-edc5f924dc00', createdAt: 3,
+      projectID: 'test-project', rootSessionID: 'ses_archived',
+      ...(scenario === 'saved' ? { worktrees: [snapshot] } : {}),
+      sessions: [{ info: {
+        id: 'ses_archived', projectID: 'test-project', title: 'Archived', location,
+        cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1, updated: 2 },
+      }, messages: [] }],
+    };
+    const reference = { id: bundle.id, fingerprint: fingerprint(bundle) };
+    const state = new Map();
+    const prompts = [];
+    const confirmations = [];
+    const prepared = [];
+    const events = [];
+    const toasts = [];
+    const refreshed = [];
+    let commands;
+    let route = { type: 'home' };
+    const assertScope = scope => assert.deepEqual(scope, { location });
+    plugin.setup({
+      location,
+      client: {
+        file: { list: async () => ({ location, data: [] }) },
+        location: { get: async () => ({ project: { id: 'test-project' } }) },
+        rpc: () => ({
+          restoreMappings: async () => [],
+          read: async ({ id }, scope) => { assertScope(scope); assert.equal(id, bundle.id); return structuredClone(bundle); },
+          worktreeMissing: async ({ locations }, scope) => {
+            assertScope(scope); assert.deepEqual(locations, [target]); return [target];
+          },
+          worktreePrepare: async ({ archive, request }, scope) => {
+            assertScope(scope); assert.deepEqual(archive, reference);
+            assert.deepEqual(request, { ...target, repository: snapshot.repository, worktree: snapshot.worktree,
+              ref: scenario === 'saved' ? snapshot.commit : 'feature/session' });
+            const { ref, ...source } = request;
+            const plan = { ...source, commit: snapshot.commit };
+            prepared.push(plan);
+            return plan;
+          },
+          worktreeRecreate: async ({ archive, plan }, scope) => {
+            assertScope(scope); assert.deepEqual(archive, reference);
+            assert.deepEqual(plan, prepared[0]);
+            assert.equal(confirmations.length, 1);
+            events.push('recreate');
+            return null;
+          },
+        }),
+        session: {
+          list: async () => ({ data: [...state.values()].map(item => item.info), cursor: {} }),
+          import: async data => { events.push('import'); state.set(data.info.id, structuredClone(data)); return data.info; },
+        },
+        message: { list: async ({ sessionID }) => ({ data: state.get(sessionID).messages, cursor: {} }) },
+      },
+      keymap: { layer: factory => { commands = factory().commands; } },
+      data: { session: { invalidate: id => refreshed.push(id), sync: async () => {} } },
+      ui: {
+        router: { current: () => route, navigate: next => { route = next; } },
+        tabs: { open: () => events.push('open') },
+        toast: { show: toast => toasts.push(toast) },
+        dialog: {
+          prompt: async question => {
+            prompts.push(question);
+            const index = prompts.length - 1;
+            if (scenario === 'cancel-source-' + index) return undefined;
+            return [snapshot.repository, 'feature/session', snapshot.worktree][index];
+          },
+          confirm: async question => {
+            confirmations.push(question);
+            assert.match(question.message, new RegExp('Commit: ' + snapshot.commit));
+            assert.match(question.message, /Repository: \\/synthetic\\/source/);
+            assert.match(question.message, /Worktree: \\/synthetic\\/worktree/);
+            assert.deepEqual(question.label, { confirm: 'Recreate and restore', cancel: 'Cancel' });
+            if (scenario === 'saved') assert.match(question.message, /uncommitted or untracked files.*not saved and cannot be restored/);
+            return scenario === 'cancel-confirm' ? false : scenario === 'close-confirm' ? undefined : true;
+          },
+        },
+      },
+    });
+    await commands.find(command => command.id === 'simpod.session-archive.restore').run(bundle.id);
+    assert(!toasts.some(toast => toast.variant === 'error'), JSON.stringify(toasts));
+    if (scenario.startsWith('cancel-source-')) {
+      assert.equal(prompts.length, Number(scenario.at(-1)) + 1);
+      assert.deepEqual(prepared, []);
+      assert.deepEqual(confirmations, []);
+    } else {
+      assert.equal(prompts.length, scenario === 'saved' ? 0 : 3);
+      assert.equal(confirmations.length, 1);
+    }
+    if (prompts.length === 3) {
+      assert.deepEqual(prompts.map(question => question.title), [
+        'Existing repository on the server', 'Branch or commit', 'Worktree root to recreate',
+      ]);
+      assert.equal(prompts[2].value, location.directory);
+    }
+    if (scenario === 'legacy' || scenario === 'saved') {
+      assert.deepEqual(events, ['recreate', 'import', 'open']);
+      assert.deepEqual(refreshed, ['ses_archived']);
+      assert.equal(route.sessionID, 'ses_archived');
+      assert.equal(toasts.at(-1).variant, 'success');
+    } else {
+      assert.deepEqual(events, []);
+      assert.deepEqual(refreshed, []);
+      assert.equal(state.size, 0);
+      assert.deepEqual(route, { type: 'home' });
+      assert.deepEqual(toasts, []);
+    }
+  `;
+  for (const scenario of [
+    'legacy',
+    'saved',
+    'cancel-source-0',
+    'cancel-source-1',
+    'cancel-source-2',
+    'cancel-confirm',
+    'close-confirm',
+  ]) {
+    await t.test(scenario, async () => {
+      await execute(
+        process.execPath,
+        ['--experimental-strip-types', '--input-type=module', '-e', script],
+        {
+          env: { ...process.env, RECOVERY_SCENARIO: scenario },
+          timeout: 5_000,
+        },
+      );
+    });
+  }
 });

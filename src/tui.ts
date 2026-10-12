@@ -7,6 +7,8 @@ import { Archives } from './rpc.ts';
 import { canRestore } from './restore-storage.ts';
 import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
+import { worktreeRecovery } from './worktree-recovery.ts';
+import type { WorktreeGateway } from './worktrees.ts';
 
 export default Plugin.define({
   id: 'simpod-sessions-tui',
@@ -41,7 +43,10 @@ export default Plugin.define({
       }
     }
 
-    async function scoped(location: LocationRef) {
+    async function scoped(
+      location: LocationRef,
+      archive?: { id: string; fingerprint: string },
+    ) {
       const scope = await context.client.location.get({ location });
       const restoreMappings = await rpc.restoreMappings({}, { location });
       const storage: ArchiveStorage = {
@@ -70,10 +75,30 @@ export default Plugin.define({
           return rpc.save({ bundle }, { location });
         },
       };
+      const worktrees: WorktreeGateway = {
+        capture: (locations) =>
+          rpc.worktreeCapture({ locations }, { location }),
+        missing: (locations) =>
+          rpc.worktreeMissing({ locations }, { location }),
+        prepare: (request) => {
+          if (!archive)
+            throw new Error('Select an archive before recreating worktrees.');
+          return rpc.worktreePrepare({ archive, request }, { location });
+        },
+        async recreate(plan) {
+          if (!archive)
+            throw new Error('Select an archive before recreating worktrees.');
+          await rpc.worktreeRecreate({ archive, plan }, { location });
+        },
+      };
       return {
         storage,
         projectID: scope.project.id,
-        service: new SessionArchive(gateway(context.client), storage),
+        service: new SessionArchive(
+          gateway(context.client),
+          storage,
+          worktrees,
+        ),
         restoreMappings,
       };
     }
@@ -169,7 +194,7 @@ export default Plugin.define({
       ) {
         throw new Error('Provide a session ID or archive UUID to restore.');
       }
-      const { storage, service, restoreMappings } = await scoped(location);
+      const { storage, restoreMappings } = await scoped(location);
       let id = targetSessionID ? undefined : argument;
       if (!id) {
         const archives = await storage.list(targetSessionID);
@@ -212,11 +237,42 @@ export default Plugin.define({
         throw new Error(
           `The archive does not contain ${targetSessionID}. Nothing was restored.`,
         );
+      const { service } = await scoped(location, {
+        id,
+        fingerprint: fingerprint(bundle),
+      });
       const restored = await service.restore(
         id,
         fingerprint(bundle),
         restoreMappings,
+        worktreeRecovery({
+          async source(directory) {
+            const repository = await context.ui.dialog.prompt({
+              title: 'Existing repository on the server',
+              description: `The restore directory is missing: ${directory}`,
+              placeholder: '/absolute/path/to/repository',
+            });
+            if (repository === undefined) return undefined;
+            const ref = await context.ui.dialog.prompt({
+              title: 'Branch or commit',
+            });
+            if (ref === undefined) return undefined;
+            const worktree = await context.ui.dialog.prompt({
+              title: 'Worktree root to recreate',
+              value: directory,
+            });
+            if (worktree === undefined) return undefined;
+            return { repository, ref, worktree };
+          },
+          confirm: async (message) =>
+            (await context.ui.dialog.confirm({
+              title: 'Confirm worktree recreation',
+              message,
+              label: { confirm: 'Recreate and restore', cancel: 'Cancel' },
+            })) === true,
+        }),
       );
+      if (!restored) return;
       for (const sessionID of restored.sessionIDs)
         context.data.session.invalidate(sessionID);
       try {

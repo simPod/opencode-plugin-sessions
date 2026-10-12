@@ -127,6 +127,31 @@ incompatible Effect release candidate and fail to load in OpenCode 2.0.27.
 
 ## Restore after a rename or removed worktree
 
+Restore offers to recreate missing Git worktrees before importing sessions. New
+version-2 archives record each linked worktree's repository, commit, branch
+label, and whether it contained uncommitted or untracked files. Version-1
+archives remain readable; for a missing location, enter an existing repository
+on the server, a branch or commit, and the worktree root. A session can point
+inside that root.
+
+Review the exact repository, destination, and resolved commit, then choose
+**Recreate and restore**. Cancelling any input or confirmation creates no
+worktrees and imports no sessions. Recreation uses detached Git worktrees so
+existing branches do not move. It does not overwrite paths, force stale Git
+registrations, fetch repositories, or run Git hooks, configured checkout
+filters, or OpenCode startup commands. Filter-managed content such as Git LFS
+files stays in its committed form until you explicitly run the relevant tool.
+Recovery requires the hosting server's managed-service registration; ordinary
+TUI archive and restore remain available without it.
+
+These archives are not project backups. Only committed files are recreated;
+uncommitted files, untracked files, dependencies, and local environment files
+are not restored. A dirty-worktree snapshot adds a warning to the confirmation.
+If creation or later restore checks fail, keep the archive and any created
+worktrees for inspection; the plugin does not automatically remove them. All
+restore locations must still match their expected projects before any session is
+imported.
+
 Optional server plugin `restoreMappings` explicitly relocate archived sessions.
 The default is `[]`: restore uses the original project and directory.
 
@@ -188,12 +213,13 @@ private storage and an encrypted disk or filesystem if needed. Do not commit
 archive files to Git or expose their directory through HTTP.
 
 Each versioned JSON file contains the root and all descendants in parent-first
-order, their original project IDs and directories, and a SHA-256 checksum. A
-family can span multiple projects, including non-Git locations. The whole
-archive stays in the root project's folder; it is not split between descendant
-projects. Writes are synced, published atomically without overwriting an
-existing archive, and read back before deletion. The checksum detects accidental
-damage, not malicious edits by someone who can write the directory.
+order, their original project IDs and directories, optional Git recovery
+metadata, and a SHA-256 checksum. A family can span multiple projects, including
+non-Git locations. The whole archive stays in the root project's folder; it is
+not split between descendant projects. Writes are synced, published atomically
+without overwriting an existing archive, and read back before deletion. The
+checksum detects accidental damage, not malicious edits by someone who can write
+the directory.
 
 ## Safety and limitations
 
@@ -210,10 +236,11 @@ damage, not malicious edits by someone who can write the directory.
   imported before children at their original working directories. Before any
   import, every saved directory must pass a fresh server filesystem check and
   resolve to its original project ID, or an explicitly configured mapped project
-  ID. Recreate removed worktrees, restore the original project identity, or set
-  a restore mapping before restoring. This project lookup can be cached, so the
-  plugin also verifies each imported project ID, location, and transcript and
-  stops if the server changes them. It does not silently remap project IDs.
+  ID. Confirm recreation of removed Git worktrees, restore the original project
+  identity, or set a restore mapping before restoring. This project lookup can
+  be cached, so the plugin also verifies each imported project ID, location, and
+  transcript and stops if the server changes them. It does not silently remap
+  project IDs.
 - The root project's archive contains private transcripts from every descendant
   project. Project folders organize storage; they are not separate authorization
   boundaries. Use only a server and archive storage you trust for all these

@@ -50,8 +50,8 @@ archive still contains the supplied session ID. Do not widen project scope or
 change saved files, archive identity, or restoration safeguards for this lookup.
 
 Server commands must appear in both clients' slash-command lists. Use native
-question forms for archive selection and results. Archive, restore, and delete
-run without confirmation in both desktop and TUI. Selecting an archive restores it
+question forms for archive selection and results. Archive, ordinary restore,
+and delete run without confirmation in both desktop and TUI. Selecting an archive restores it
 immediately; cancelling the archive picker makes no changes. Commands cannot be
 queued. After archiving or deleting the open session, the user can open another session from
 the session list; restoring through a slash command makes the original sessions
@@ -75,6 +75,21 @@ absolute directory to an explicit destination project ID and absolute directory.
 The default is no mappings. Apply each match once; do not infer projects, match
 directory prefixes, or chain rules. Reject duplicate source pairs. Desktop and
 TUI use the same server configuration, without new commands or confirmations.
+
+When an effective restore location is missing, offer explicit Git worktree
+recreation. New version-2 archives record linked-worktree repository, root,
+commit, branch label, and dirty state. Keep version-1 archives readable; request
+an existing server repository, branch or commit, and root when metadata is
+absent. Show the resolved commit and all destinations before creation, and
+require an explicit confirmation. Cancelling input or confirmation must make no
+changes. Use detached worktrees without moving branches, replacing paths,
+fetching, running Git hooks or configured filters, or running startup commands.
+Match the source repository to the expected project and recheck all resulting
+session locations before import. Never create arbitrary missing non-Git
+directories. Warn that only committed files are recreated and that dirty files,
+dependencies, and env files are not saved. Keep created worktrees after partial
+failure for manual inspection. Recovery is executed on the server; TUI clients
+must not run local Git commands.
 
 Mapped restore changes only imported project IDs and directories; retain session
 IDs, parent links, transcripts, and original archive bytes. Mapped root archives
@@ -156,4 +171,5 @@ checkout only after the user chooses to enable it. See
 [ADR 0005](adr/0005-cross-project-session-trees.md) and
 [ADR 0006](adr/0006-explicit-restore-relocations.md) and
 [ADR 0007](adr/0007-server-owned-slash-commands.md) and
-[ADR 0008](adr/0008-immediate-session-deletion.md).
+[ADR 0008](adr/0008-immediate-session-deletion.md) and
+[ADR 0009](adr/0009-confirmed-worktree-recreation.md).

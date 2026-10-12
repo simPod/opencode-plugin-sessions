@@ -3,15 +3,43 @@ import { z } from 'zod';
 import {
   ArchiveID,
   Bundle,
+  RestoreLocation,
   RestoreMappings,
   SessionID,
   Summary,
+  WorktreePlan,
+  WorktreeRequest,
+  WorktreeSnapshot,
 } from './schema.ts';
+
+const ArchiveReference = z.strictObject({
+  id: ArchiveID,
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
 
 export const Archives = Rpc.define({
   id: 'simpod-session-archive',
   events: {},
   methods: {
+    worktreeCapture: {
+      input: z.strictObject({ locations: z.array(RestoreLocation) }),
+      output: z.array(WorktreeSnapshot),
+    },
+    worktreeMissing: {
+      input: z.strictObject({ locations: z.array(RestoreLocation) }),
+      output: z.array(RestoreLocation),
+    },
+    worktreePrepare: {
+      input: z.strictObject({
+        archive: ArchiveReference,
+        request: WorktreeRequest,
+      }),
+      output: WorktreePlan,
+    },
+    worktreeRecreate: {
+      input: z.strictObject({ archive: ArchiveReference, plan: WorktreePlan }),
+      output: z.null(),
+    },
     restoreMappings: { input: z.strictObject({}), output: RestoreMappings },
     instance: {
       input: z.strictObject({}),

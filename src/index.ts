@@ -9,6 +9,9 @@ import { Archives } from './rpc.ts';
 import { restoreStorage } from './restore-storage.ts';
 import { RestoreMappings } from './schema.ts';
 import { FileArchiveStorage } from './storage.ts';
+import { fingerprint } from './fingerprint.ts';
+import type { RestoreLocation } from './schema.ts';
+import { GitWorktrees } from './worktrees.ts';
 
 const Options = z.strictObject({
   storageDirectory: z.string().min(1).optional(),
@@ -51,7 +54,62 @@ export default Plugin.define({
     });
     const instanceID = randomUUID();
     const lifetime = new AbortController();
+    const connect = () =>
+      desktopClient(
+        {
+          directory: context.location.directory,
+          ...(context.location.workspaceID === undefined
+            ? {}
+            : { workspaceID: context.location.workspaceID }),
+        },
+        instanceID,
+        lifetime.signal,
+      );
+    const worktrees = new GitWorktrees(
+      async (directory) => (await connect()).sessions.resolveProject(directory),
+      lifetime.signal,
+    );
+    async function assertRecoveryLocation(
+      archive: { id: string; fingerprint: string },
+      target: RestoreLocation,
+    ): Promise<void> {
+      const bundle = await storage.read(archive.id);
+      if (fingerprint(bundle) !== archive.fingerprint)
+        throw new Error(
+          'The archive changed after inspection. Nothing was imported.',
+        );
+      const eligible = bundle.sessions.some(({ info }) => {
+        const mapping = options.restoreMappings.find(
+          ({ from }) =>
+            from.projectID === info.projectID &&
+            from.directory === info.location.directory,
+        );
+        const destination = mapping?.to ?? {
+          projectID: info.projectID,
+          directory: info.location.directory,
+        };
+        return (
+          destination.projectID === target.projectID &&
+          destination.directory === target.directory
+        );
+      });
+      if (!eligible)
+        throw new Error(
+          'Worktree recovery must belong to the selected archive.',
+        );
+    }
     const registration = await context.rpc.register(Archives, {
+      worktreeCapture: ({ locations }) => worktrees.capture(locations),
+      worktreeMissing: ({ locations }) => worktrees.missing(locations),
+      worktreePrepare: async ({ archive, request }) => {
+        await assertRecoveryLocation(archive, request);
+        return worktrees.prepare(request);
+      },
+      worktreeRecreate: async ({ archive, plan }) => {
+        await assertRecoveryLocation(archive, plan);
+        await worktrees.recreate(plan);
+        return null;
+      },
       restoreMappings: async () => options.restoreMappings,
       instance: async () => ({ id: instanceID }),
       list: ({ sessionID }) => storage.list(sessionID),
@@ -61,17 +119,7 @@ export default Plugin.define({
     let commands;
     try {
       const definitions = desktopCommands(
-        () =>
-          desktopClient(
-            {
-              directory: context.location.directory,
-              ...(context.location.workspaceID === undefined
-                ? {}
-                : { workspaceID: context.location.workspaceID }),
-            },
-            instanceID,
-            lifetime.signal,
-          ),
+        connect,
         storage,
         {
           projectID: context.location.project.id,
@@ -79,6 +127,7 @@ export default Plugin.define({
         },
         lifetime.signal,
         options.restoreMappings,
+        worktrees,
       );
       commands = await context.command.transform((editor) => {
         for (const command of definitions) editor.add(command);

@@ -6,12 +6,32 @@ import { z } from 'zod';
 
 export const SessionID = z.string().regex(/^ses_[a-zA-Z0-9]+$/);
 export const ArchiveID = z.uuid();
-const RestoreLocation = z.strictObject({
+export const RestoreLocation = z.strictObject({
   projectID: z.string().min(1),
   directory: z
     .string()
     .refine(isAbsolute, 'Restore directories must be absolute server paths'),
 });
+export type RestoreLocation = z.infer<typeof RestoreLocation>;
+const AbsoluteDirectory = RestoreLocation.shape.directory;
+const Commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+export const WorktreePlan = RestoreLocation.extend({
+  commit: Commit,
+  repository: AbsoluteDirectory,
+  worktree: AbsoluteDirectory,
+});
+export type WorktreePlan = z.infer<typeof WorktreePlan>;
+export const WorktreeSnapshot = WorktreePlan.extend({
+  dirty: z.boolean(),
+  branch: z.string().min(1).optional(),
+});
+export type WorktreeSnapshot = z.infer<typeof WorktreeSnapshot>;
+export const WorktreeRequest = RestoreLocation.extend({
+  ref: z.string().min(1),
+  repository: AbsoluteDirectory,
+  worktree: AbsoluteDirectory,
+});
+export type WorktreeRequest = z.infer<typeof WorktreeRequest>;
 export const RestoreMappings = z
   .array(
     z.strictObject({
@@ -43,17 +63,43 @@ export const Transfer = z.custom<SessionTransferData>(
   isTransfer,
   'Invalid V2 session transfer',
 );
+const BundleFields = {
+  format: z.literal('opencode-session-archive'),
+  id: ArchiveID,
+  createdAt: z.number().int().positive(),
+  projectID: z.string().min(1),
+  rootSessionID: SessionID,
+  sessions: z.array(Transfer).min(1),
+};
 export const Bundle = z
-  .strictObject({
-    format: z.literal('opencode-session-archive'),
-    version: z.literal(1),
-    id: ArchiveID,
-    createdAt: z.number().int().positive(),
-    projectID: z.string().min(1),
-    rootSessionID: SessionID,
-    sessions: z.array(Transfer).min(1),
-  })
+  .discriminatedUnion('version', [
+    z.strictObject({ ...BundleFields, version: z.literal(1) }),
+    z.strictObject({
+      ...BundleFields,
+      version: z.literal(2),
+      worktrees: z.array(WorktreeSnapshot),
+    }),
+  ])
   .superRefine((bundle, context) => {
+    if (bundle.version === 2) {
+      const locations = new Set<string>();
+      for (const snapshot of bundle.worktrees) {
+        const key = JSON.stringify([snapshot.projectID, snapshot.directory]);
+        if (
+          locations.has(key) ||
+          !bundle.sessions.some(
+            ({ info }) =>
+              info.projectID === snapshot.projectID &&
+              info.location.directory === snapshot.directory,
+          )
+        )
+          context.addIssue({
+            code: 'custom',
+            message: 'Invalid worktree location',
+          });
+        locations.add(key);
+      }
+    }
     const seen = new Set<string>();
     const messageIDs = new Set<string>();
     const all = new Set(bundle.sessions.map((session) => session.info.id));

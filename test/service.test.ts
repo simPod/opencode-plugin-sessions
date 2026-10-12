@@ -11,8 +11,11 @@ import type {
   ArchiveStorage,
   ArchiveSummary,
   RestoreMapping,
+  WorktreePlan,
+  WorktreeSnapshot,
 } from '../src/schema.ts';
 import { SessionArchive } from '../src/service.ts';
+import type { WorktreeGateway } from '../src/worktrees.ts';
 
 const familyIDs = ['ses_root', 'ses_child', 'ses_grandchild'];
 
@@ -195,6 +198,7 @@ class StatefulSessions implements SessionGateway {
   }
 
   async import(data: SessionTransferData): Promise<SessionInfo> {
+    this.events.push(`import:${data.info.id}`);
     this.imports.push(structuredClone(data));
     if (data.info.id === this.importFailureID)
       throw new Error('Native import failed');
@@ -853,4 +857,146 @@ test('partial native import failure keeps verified restored sessions and the arc
     onlyBundle(f.storage).sessions.map((item) => item.info.id),
     familyIDs,
   );
+});
+
+function worktreeFixture() {
+  const f = fixture();
+  const snapshot: WorktreeSnapshot = {
+    projectID: 'project-a',
+    directory: '/synthetic/ses_child',
+    worktree: '/synthetic/ses_child',
+    repository: '/synthetic/repository',
+    commit: 'a'.repeat(40),
+    branch: 'feature',
+    dirty: true,
+  };
+  f.sessions.item('ses_grandchild').info.location.directory =
+    snapshot.directory;
+  const recreated: WorktreePlan[] = [];
+  const worktrees: WorktreeGateway = {
+    capture: async (locations) =>
+      locations
+        .filter((location) => location.directory === snapshot.directory)
+        .map(() => snapshot),
+    missing: async (locations) =>
+      locations.filter((location) =>
+        f.sessions.unavailableDirectories.has(location.directory),
+      ),
+    prepare: async (request) => ({
+      projectID: request.projectID,
+      directory: request.directory,
+      worktree: request.worktree,
+      repository: request.repository,
+      commit: request.ref === 'feature' ? 'b'.repeat(40) : request.ref,
+    }),
+    async recreate(plan) {
+      f.events.push('recreate');
+      recreated.push(plan);
+      f.sessions.unavailableDirectories.delete(plan.directory);
+    },
+  };
+  return {
+    ...f,
+    service: new SessionArchive(f.sessions, f.storage, worktrees),
+    snapshot,
+    recreated,
+  };
+}
+
+test('restores a shared missing worktree only after confirming the saved commit or an explicit legacy source', async (t) => {
+  for (const legacy of [false, true])
+    await t.test(
+      legacy ? 'version 1 archive' : 'saved Git metadata',
+      async () => {
+        const f = worktreeFixture();
+        const saved = await f.service.archive(
+          await f.service.preview('ses_root'),
+        );
+        const stored = onlyBundle(f.storage);
+        assert.equal(stored.version, 2);
+        if (stored.version !== 2) assert.fail('Expected worktree metadata');
+        assert.deepEqual(stored.worktrees, [f.snapshot]);
+        if (legacy) {
+          const { worktrees: _worktrees, ...fields } = stored;
+          f.storage.bundles.set(saved.id, { ...fields, version: 1 });
+        }
+        const original = structuredClone(onlyBundle(f.storage));
+        f.sessions.unavailableDirectories.add(f.snapshot.directory);
+        const result = await f.service.restore(saved.id, undefined, [], {
+          async source(location, snapshot) {
+            assert.deepEqual(location, {
+              directory: f.snapshot.directory,
+              projectID: 'project-a',
+            });
+            assert.deepEqual(snapshot, legacy ? undefined : f.snapshot);
+            return {
+              ...location,
+              repository: f.snapshot.repository,
+              worktree: f.snapshot.worktree,
+              ref: snapshot?.commit ?? 'feature',
+            };
+          },
+          async confirm(plans, snapshots) {
+            assert.equal(f.recreated.length, 0);
+            assert.equal(f.sessions.imports.length, 0);
+            assert.equal(plans.length, 1);
+            assert.equal(plans[0]?.commit, (legacy ? 'b' : 'a').repeat(40));
+            assert.deepEqual(snapshots, legacy ? [] : [f.snapshot]);
+            return true;
+          },
+        });
+        assert.deepEqual(result, {
+          rootSessionID: 'ses_root',
+          sessionIDs: familyIDs,
+        });
+        assert.equal(f.recreated.length, 1);
+        assert(
+          f.events.indexOf('recreate') < f.events.indexOf('import:ses_root'),
+        );
+        assert.deepEqual(onlyBundle(f.storage), original);
+      },
+    );
+});
+
+test('cancelled worktree input or confirmation does not create directories or import sessions', async (t) => {
+  for (const cancelSource of [false, true])
+    await t.test(cancelSource ? 'source input' : 'confirmation', async () => {
+      const f = worktreeFixture();
+      const saved = await f.service.archive(
+        await f.service.preview('ses_root'),
+      );
+      f.sessions.unavailableDirectories.add(f.snapshot.directory);
+      const result = await f.service.restore(saved.id, undefined, [], {
+        source: async (location) =>
+          cancelSource
+            ? undefined
+            : {
+                ...location,
+                repository: f.snapshot.repository,
+                worktree: f.snapshot.worktree,
+                ref: f.snapshot.commit,
+              },
+        confirm: async () => false,
+      });
+      assert.equal(result, undefined);
+      assert.deepEqual(f.recreated, []);
+      assert.deepEqual(f.sessions.imports, []);
+      assert(f.storage.bundles.has(saved.id));
+    });
+});
+
+test('an existing destination with the wrong project blocks recovery before filesystem changes', async () => {
+  const f = worktreeFixture();
+  const saved = await f.service.archive(await f.service.preview('ses_root'));
+  f.sessions.unavailableDirectories.add(f.snapshot.directory);
+  f.sessions.projects.set('/synthetic/ses_root', 'project-other');
+  await assert.rejects(
+    f.service.restore(saved.id, undefined, [], {
+      source: async () => assert.fail('No recovery prompts should be shown'),
+      confirm: async () => assert.fail('No confirmation should be shown'),
+    }),
+    /another project/,
+  );
+  assert.deepEqual(f.recreated, []);
+  assert.deepEqual(f.sessions.imports, []);
 });

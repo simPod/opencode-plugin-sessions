@@ -14,7 +14,11 @@ import {
   type ArchiveBundle,
   type ArchiveStorage,
   type RestoreMapping,
+  type WorktreePlan,
+  type WorktreeRequest,
+  type WorktreeSnapshot,
 } from '../src/schema.ts';
+import type { WorktreeGateway } from '../src/worktrees.ts';
 
 const archiveID = randomUUID();
 function transfer(id: string, projectID = 'project-a'): SessionTransferData {
@@ -52,6 +56,34 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
   const answers: Array<FormAnswer | undefined> = [];
   const events: string[] = [];
   const lookups: Array<string | undefined> = [];
+  const recovery = {
+    missing: false,
+    captured: [] as WorktreeSnapshot[],
+    requests: [] as WorktreeRequest[],
+    recreated: [] as WorktreePlan[],
+  };
+  const worktrees: WorktreeGateway = {
+    async capture() {
+      return recovery.captured;
+    },
+    async missing(locations) {
+      return recovery.missing ? locations : [];
+    },
+    async prepare(request) {
+      recovery.requests.push(request);
+      return {
+        projectID: request.projectID,
+        directory: request.directory,
+        repository: request.repository,
+        worktree: request.worktree,
+        commit: 'a'.repeat(40),
+      };
+    },
+    async recreate(plan) {
+      events.push('recreate');
+      recovery.recreated.push(plan);
+    },
+  };
   const abort = new AbortController();
   let beforeAnswer: (() => void) | undefined;
   let answerGate: Promise<void> | undefined;
@@ -146,6 +178,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     { projectID: 'project-a', directory: '/synthetic/project' },
     abort.signal,
     restoreMappings,
+    worktrees,
   );
   async function run(
     name: string,
@@ -161,12 +194,17 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
       delivery,
     });
   }
-  function archived(projectID = 'project-a', id = archiveID, descendant = false) {
+  function archived(
+    projectID = 'project-a',
+    id = archiveID,
+    descendant = false,
+    snapshots?: WorktreeSnapshot[],
+  ) {
     const child = transfer('ses_child', projectID);
     child.info.parentID = 'ses_archived';
     const bundle = Bundle.parse({
       format: 'opencode-session-archive',
-      version: 1,
+      ...(snapshots ? { version: 2, worktrees: snapshots } : { version: 1 }),
       id,
       createdAt: 3,
       rootSessionID: 'ses_archived',
@@ -187,6 +225,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     answers,
     events,
     lookups,
+    recovery,
     abort,
     sessions: host.sessions,
     archived,
@@ -491,6 +530,120 @@ test('desktop session lookup limits repeated archives to the picker and rejects 
       assert.deepEqual(f.lookups, ['ses_child']);
       assert.deepEqual(f.events, outcome === 'restore' ? ['import', 'import'] : []);
       assert.equal(f.state.has('ses_child'), outcome === 'restore');
+    });
+});
+
+test('desktop missing-directory restore collects a source and confirms the resolved commit before importing', async () => {
+  const f = fixture();
+  f.archived();
+  f.recovery.missing = true;
+  f.answers.push(
+    {
+      repository: '/synthetic/source',
+      ref: 'feature/session',
+      worktree: '/synthetic/project',
+    },
+    { action: 'recreate' },
+  );
+  await f.run('session-restore', archiveID);
+  const [source, confirmation] = f.questions;
+  assert(source);
+  assert(confirmation);
+  assert.deepEqual(
+    source.fields.map((field) => field.key),
+    ['repository', 'ref', 'worktree'],
+  );
+  const worktreeField = source.fields.find((field) => field.key === 'worktree');
+  assert(worktreeField?.type === 'string');
+  assert.equal(worktreeField.default, '/synthetic/project');
+  assert.deepEqual(f.recovery.requests, [
+    {
+      projectID: 'project-a',
+      directory: '/synthetic/project',
+      repository: '/synthetic/source',
+      ref: 'feature/session',
+      worktree: '/synthetic/project',
+    },
+  ]);
+  const action = confirmation.fields[0];
+  assert(action?.type === 'string');
+  assert.match(action.description ?? '', /Repository: \/synthetic\/source/);
+  assert.match(
+    action.description ?? '',
+    new RegExp(`Commit: ${'a'.repeat(40)}`),
+  );
+  assert(!action.description?.includes('feature/session'));
+  assert.deepEqual(
+    action.options?.map((option) => option.value),
+    ['recreate', 'cancel'],
+  );
+  assert.deepEqual(f.events, ['recreate', 'import']);
+  assert(f.state.has('ses_archived'));
+});
+
+test('desktop saved worktree metadata skips source input and warns that dirty files cannot be restored', async () => {
+  const f = fixture();
+  const saved: WorktreeSnapshot = {
+    projectID: 'project-a',
+    directory: '/synthetic/project',
+    repository: '/synthetic/source',
+    worktree: '/synthetic/project',
+    commit: 'a'.repeat(40),
+    branch: 'old-branch',
+    dirty: true,
+  };
+  f.archived('project-a', archiveID, false, [saved]);
+  f.recovery.missing = true;
+  f.answers.push({ action: 'recreate' });
+  await f.run('session-restore', archiveID);
+  assert.equal(f.questions.length, 1);
+  assert.equal(f.questions[0]?.title, 'Confirm worktree recreation');
+  const message = f.questions[0]?.fields[0]?.description ?? '';
+  assert.match(message, new RegExp(`Commit: ${saved.commit}`));
+  assert.match(
+    message,
+    /uncommitted or untracked files.*not saved and cannot be restored/,
+  );
+  assert.equal(f.recovery.requests[0]?.ref, saved.commit);
+  assert.deepEqual(f.events, ['recreate', 'import']);
+});
+
+test('desktop source and confirmation cancellation never recreate a worktree or import a session', async (t) => {
+  const source = {
+    repository: '/synthetic/source',
+    ref: 'main',
+    worktree: '/synthetic/project',
+  };
+  const cases: Array<{
+    name: string;
+    answers: Array<FormAnswer | undefined>;
+    prepared: number;
+  }> = [
+    { name: 'source closed', answers: [undefined], prepared: 0 },
+    {
+      name: 'cancel action',
+      answers: [source, { action: 'cancel' }],
+      prepared: 1,
+    },
+    { name: 'confirmation closed', answers: [source, undefined], prepared: 1 },
+    {
+      name: 'unrecognized action is not consent',
+      answers: [source, { action: 'yes' }],
+      prepared: 1,
+    },
+  ];
+  for (const row of cases)
+    await t.test(row.name, async () => {
+      const f = fixture();
+      f.archived();
+      f.recovery.missing = true;
+      f.answers.push(...row.answers);
+      await f.run('session-restore', archiveID);
+      assert.equal(f.recovery.requests.length, row.prepared);
+      assert.deepEqual(f.recovery.recreated, []);
+      assert.deepEqual(f.events, []);
+      assert(!f.state.has('ses_archived'));
+      assert.deepEqual(f.reports, []);
     });
 });
 

@@ -10,6 +10,8 @@ import {
   type RestoreMapping,
 } from './schema.ts';
 import { SessionArchive } from './service.ts';
+import { worktreeRecovery } from './worktree-recovery.ts';
+import type { WorktreeGateway } from './worktrees.ts';
 
 export function desktopCommands(
   connect: () => Promise<DesktopHost>,
@@ -17,6 +19,7 @@ export function desktopCommands(
   scope: { projectID: string; directory: string },
   signal: AbortSignal,
   restoreMappings: RestoreMapping[] = [],
+  worktrees?: WorktreeGateway,
 ): CommandDefinition[] {
   const projectID = scope.projectID;
   let running = false;
@@ -134,11 +137,79 @@ export function desktopCommands(
         `The archive does not contain ${targetSessionID}. Nothing was restored.`,
       );
     signal.throwIfAborted();
-    const result = await new SessionArchive(host.sessions, storage).restore(
+    const result = await new SessionArchive(
+      host.sessions,
+      storage,
+      worktrees,
+    ).restore(
       id,
       fingerprint(bundle),
       restoreMappings,
+      worktreeRecovery({
+        async source(directory) {
+          const answer = await host.ask(
+            sessionID,
+            'Recreate missing Git worktree',
+            [
+              {
+                key: 'repository',
+                type: 'string',
+                title: 'Existing repository on the server',
+                required: true,
+              },
+              {
+                key: 'ref',
+                type: 'string',
+                title: 'Branch or commit',
+                required: true,
+              },
+              {
+                key: 'worktree',
+                type: 'string',
+                title: 'Worktree root to recreate',
+                default: directory,
+                required: true,
+              },
+            ],
+          );
+          if (!answer) return undefined;
+          if (
+            typeof answer.repository !== 'string' ||
+            typeof answer.ref !== 'string' ||
+            typeof answer.worktree !== 'string'
+          )
+            throw new Error(
+              'Provide a repository, branch or commit, and worktree root.',
+            );
+          return {
+            repository: answer.repository,
+            ref: answer.ref,
+            worktree: answer.worktree,
+          };
+        },
+        async confirm(message) {
+          const answer = await host.ask(
+            sessionID,
+            'Confirm worktree recreation',
+            [
+              {
+                key: 'action',
+                type: 'string',
+                title: 'Recreate worktrees?',
+                description: message,
+                required: true,
+                options: [
+                  { value: 'recreate', label: 'Recreate and restore' },
+                  { value: 'cancel', label: 'Cancel' },
+                ],
+              },
+            ],
+          );
+          return answer?.action === 'recreate';
+        },
+      }),
     );
+    if (!result) return;
     try {
       await host.report(
         sessionID,
@@ -168,7 +239,7 @@ export function desktopCommands(
         const target = argument || sessionID;
         if (!SessionID.safeParse(target).success)
           throw new Error('Use /session-archive [sessionID].');
-        const service = new SessionArchive(host.sessions, storage);
+        const service = new SessionArchive(host.sessions, storage, worktrees);
         const preview = await service.preview(target);
         if (preview.projectID !== projectID)
           throw new Error(
