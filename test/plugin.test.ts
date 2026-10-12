@@ -68,11 +68,18 @@ test('server archive listing finds root and descendant session IDs without retur
 test('server plugin uses its home-directory default and honors explicit storage overrides', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'session-plugin-home-'));
   t.after(() => rm(home, { recursive: true, force: true }));
-  // A separate server process keeps HOME changes out of other tests. Its RPC
-  // registration calls the real handler, which creates project-scoped storage.
+  // A separate server process keeps HOME changes out of other tests. Share its
+  // Effect runtime with transitive SDK imports, as the OpenCode host does.
+  // Its RPC registration calls the real handler to create project storage.
   const script = `
     import { strict as assert } from 'node:assert';
-    import plugin from ${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)};
+    import { registerHooks } from 'node:module';
+    registerHooks({ resolve(specifier, context, nextResolve) {
+      if (specifier === 'effect' || specifier.startsWith('effect/'))
+        return nextResolve(specifier, { ...context, parentURL: import.meta.url });
+      return nextResolve(specifier, context);
+    } });
+    const { default: plugin } = await import(${JSON.stringify(new URL('../src/index.ts', import.meta.url).href)});
     const commands = [];
     await plugin.setup({
       options: JSON.parse(process.env.ARCHIVE_OPTIONS),

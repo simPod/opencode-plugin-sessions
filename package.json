@@ -26,19 +26,19 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
-    "@opencode/client": "2.0.24",
-    "@opencode/schema": "2.0.24",
-    "effect": "4.0.0-rc.112",
+    "@opencode/client": "2.0.27",
+    "@opencode/schema": "2.0.27",
+    "effect": "4.0.1",
     "zod": "4.1.8"
   },
   "peerDependencies": {
-    "@opencode/plugin": ">=2.0.24 <3"
+    "@opencode/plugin": ">=2.0.27 <3"
   },
   "devDependencies": {
-    "@opencode/plugin": "2.0.24",
-    "@opencode/theme": "^2.0.24",
-    "@opentui/core": "^0.5.14",
-    "@opentui/solid": "^0.5.14",
+    "@opencode/plugin": "2.0.27",
+    "@opencode/theme": "2.0.27",
+    "@opentui/core": "^0.5.17",
+    "@opentui/solid": "^0.5.17",
     "@types/json-schema": "^7.0.15",
     "@types/node": "^24.19.1",
     "solid-js": "^1.9.12",

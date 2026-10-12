@@ -78,7 +78,7 @@ machine. The plugin does not add custom desktop buttons.
 
 ## Install
 
-Requires OpenCode V2.0.24, Git, Node 26.4 or newer, and pnpm 10.33.3. Build the
+Requires OpenCode V2.0.27, Git, Node 26.4 or newer, and pnpm 10.33.3. Build the
 local checkout:
 
 ```sh
@@ -86,9 +86,9 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-Builds use Node 24 type declarations because OpenTUI 0.5.14's `KeyHandler.emit`
-declaration is incompatible with Node 26's expanded `EventEmitter` types. The
-runtime and CI use Node 26; strict library checking remains enabled. pnpm
+Builds use Node 24 type declarations for compatibility with OpenTUI's
+`EventEmitter` declarations. The runtime and CI use Node 26; strict library
+checking remains enabled. pnpm
 applies the tracked, version-specific OpenCode SDK declaration patch during
 installation; no postinstall script or hoisted transitive dependency is needed.
 
@@ -110,7 +110,7 @@ implementation worktree:
 }
 ```
 
-Use the built `dist` directory for a local installation: V2.0.24's local
+Use the built `dist` directory for a local installation: V2.0.27's local
 directory loader looks for `index.js`, `tui.js`, and `rpc.js` there rather than
 using the root package's exports.
 
@@ -118,6 +118,12 @@ The package exports both a server plugin and `./tui` for automatic terminal
 plugin loading. A CLI plugin installed separately against a remote server still
 needs the server plugin configured there for storage RPCs. This package is not
 published to npm; installation uses the built checkout.
+
+OpenCode supplies the plugin's Effect runtime. The pinned SDK packages must
+match that runtime; after an OpenCode upgrade that changes Effect APIs, update
+the SDK packages together, reinstall dependencies, and rebuild this checkout.
+The 2.0.27 packages use Effect 4.0.1. The older 2.0.24 packages require an
+incompatible Effect release candidate and fail to load in OpenCode 2.0.27.
 
 ## Restore after a rename or removed worktree
 
