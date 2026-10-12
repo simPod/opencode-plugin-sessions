@@ -125,7 +125,9 @@ export function restoreStorage(
       if (sessionID !== undefined && !SessionID.safeParse(sessionID).success)
         throw new Error('Invalid session ID');
       try {
-        return Array.from((await discover(sessionID)).values());
+        return Array.from((await discover(sessionID)).values()).sort(
+          (left, right) => right.createdAt - left.createdAt,
+        );
       } catch {
         throw new Error(
           'Cannot list archives: corrupt, unsafe, or ambiguous archive storage',

@@ -250,7 +250,7 @@ export class FileArchiveStorage implements ArchiveStorage {
           }),
         );
       }
-      return summaries;
+      return summaries.sort((left, right) => right.createdAt - left.createdAt);
     } catch {
       throw new Error(
         'Cannot list archives: corrupt or unsafe archive storage',
