@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import type {
   FormAnswer,
   FormFields,
+  FormMetadata,
   SessionTransferData,
 } from '@opencode/client';
 import { Session } from '@opencode/schema/session';
@@ -51,8 +52,10 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     sessionID: string;
     title: string;
     fields: FormFields;
+    metadata?: FormMetadata;
   }> = [];
   const reports: string[] = [];
+  const reportMetadata: Array<FormMetadata | undefined> = [];
   const answers: Array<FormAnswer | undefined> = [];
   const events: string[] = [];
   const lookups: Array<string | undefined> = [];
@@ -161,15 +164,21 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
         return structuredClone(data.info);
       },
     },
-    async ask(sessionID, title, fields) {
-      questions.push({ sessionID, title, fields });
+    async ask(sessionID, title, fields, metadata) {
+      questions.push({
+        sessionID,
+        title,
+        fields,
+        ...(metadata === undefined ? {} : { metadata }),
+      });
       beforeAnswer?.();
       await answerGate;
       return answers.shift();
     },
-    async report(_sessionID, _title, message) {
+    async report(_sessionID, _title, message, metadata) {
       if (reportFailure) throw new Error('UI unavailable');
       reports.push(message);
+      reportMetadata.push(metadata);
     },
   };
   const commands = desktopCommands(
@@ -222,6 +231,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
     bundles,
     questions,
     reports,
+    reportMetadata,
     answers,
     events,
     lookups,
@@ -458,8 +468,23 @@ test('desktop restore without an ID restores immediately after selection and ret
       assert(f.state.has('ses_archived'));
       assert(f.bundles.has(archiveID));
       assert.equal(f.questions.length, 1);
+      assert.deepEqual(f.questions[0]?.metadata, {
+        'simpod.session-restore.archives': [
+          {
+            id: archiveID,
+            rootSessionID: 'ses_archived',
+            title: 'Title ses_archived',
+            createdAt: 3,
+            sessionCount: 1,
+          },
+        ],
+      });
       assert.deepEqual(f.events, ['import']);
       assert.match(f.reports[0] ?? '', /Open ses_archived/);
+      const result = f.reportMetadata[0]?.['simpod.session-restore.result'];
+      assert(result && typeof result === 'object' && !Array.isArray(result));
+      assert.equal(result.rootSessionID, 'ses_archived');
+      assert.deepEqual(result.sessionIDs, ['ses_archived']);
       assert.equal(f.state.get('ses_archived')?.info.projectID, 'project-a');
       assert.deepEqual(f.bundles.get(archiveID), original);
     });
@@ -533,55 +558,21 @@ test('desktop session lookup limits repeated archives to the picker and rejects 
     });
 });
 
-test('desktop missing-directory restore collects a source and confirms the resolved commit before importing', async () => {
+test('desktop missing-directory restore without recorded metadata fails without questions or writes', async () => {
   const f = fixture();
   f.archived();
   f.recovery.missing = true;
-  f.answers.push(
-    {
-      repository: '/synthetic/source',
-      ref: 'feature/session',
-      worktree: '/synthetic/project',
-    },
-    { action: 'recreate' },
+  await assert.rejects(
+    f.run('session-restore', archiveID),
+    /archive lacks a recorded repository and commit/,
   );
-  await f.run('session-restore', archiveID);
-  const [source, confirmation] = f.questions;
-  assert(source);
-  assert(confirmation);
-  assert.deepEqual(
-    source.fields.map((field) => field.key),
-    ['repository', 'ref', 'worktree'],
-  );
-  const worktreeField = source.fields.find((field) => field.key === 'worktree');
-  assert(worktreeField?.type === 'string');
-  assert.equal(worktreeField.default, '/synthetic/project');
-  assert.deepEqual(f.recovery.requests, [
-    {
-      projectID: 'project-a',
-      directory: '/synthetic/project',
-      repository: '/synthetic/source',
-      ref: 'feature/session',
-      worktree: '/synthetic/project',
-    },
-  ]);
-  const action = confirmation.fields[0];
-  assert(action?.type === 'string');
-  assert.match(action.description ?? '', /Repository: \/synthetic\/source/);
-  assert.match(
-    action.description ?? '',
-    new RegExp(`Commit: ${'a'.repeat(40)}`),
-  );
-  assert(!action.description?.includes('feature/session'));
-  assert.deepEqual(
-    action.options?.map((option) => option.value),
-    ['recreate', 'cancel'],
-  );
-  assert.deepEqual(f.events, ['recreate', 'import']);
-  assert(f.state.has('ses_archived'));
+  assert.deepEqual(f.questions, []);
+  assert.deepEqual(f.events, []);
+  assert(!f.state.has('ses_archived'));
+  assert(f.bundles.has(archiveID));
 });
 
-test('desktop saved worktree metadata skips source input and warns that dirty files cannot be restored', async () => {
+test('desktop automatically recovers saved worktrees without questions and reports recovery limits', async () => {
   const f = fixture();
   const saved: WorktreeSnapshot = {
     projectID: 'project-a',
@@ -594,57 +585,20 @@ test('desktop saved worktree metadata skips source input and warns that dirty fi
   };
   f.archived('project-a', archiveID, false, [saved]);
   f.recovery.missing = true;
-  f.answers.push({ action: 'recreate' });
   await f.run('session-restore', archiveID);
-  assert.equal(f.questions.length, 1);
-  assert.equal(f.questions[0]?.title, 'Confirm worktree recreation');
-  const message = f.questions[0]?.fields[0]?.description ?? '';
-  assert.match(message, new RegExp(`Commit: ${saved.commit}`));
+  assert.deepEqual(f.questions, []);
+  const message = f.reports[0] ?? '';
+  assert.match(message, /Open ses_archived/);
+  assert.match(message, /Archive retained:/);
   assert.match(
     message,
-    /uncommitted or untracked files.*not saved and cannot be restored/,
+    /Automatically recreated 1 Git worktree\(s\) at the recorded commits/,
   );
+  assert.match(message, /Only committed files were restored/);
+  assert.match(message, /Dependencies and environment files were not restored/);
+  assert.match(message, /Uncommitted or untracked files were not recovered/);
   assert.equal(f.recovery.requests[0]?.ref, saved.commit);
   assert.deepEqual(f.events, ['recreate', 'import']);
-});
-
-test('desktop source and confirmation cancellation never recreate a worktree or import a session', async (t) => {
-  const source = {
-    repository: '/synthetic/source',
-    ref: 'main',
-    worktree: '/synthetic/project',
-  };
-  const cases: Array<{
-    name: string;
-    answers: Array<FormAnswer | undefined>;
-    prepared: number;
-  }> = [
-    { name: 'source closed', answers: [undefined], prepared: 0 },
-    {
-      name: 'cancel action',
-      answers: [source, { action: 'cancel' }],
-      prepared: 1,
-    },
-    { name: 'confirmation closed', answers: [source, undefined], prepared: 1 },
-    {
-      name: 'unrecognized action is not consent',
-      answers: [source, { action: 'yes' }],
-      prepared: 1,
-    },
-  ];
-  for (const row of cases)
-    await t.test(row.name, async () => {
-      const f = fixture();
-      f.archived();
-      f.recovery.missing = true;
-      f.answers.push(...row.answers);
-      await f.run('session-restore', archiveID);
-      assert.equal(f.recovery.requests.length, row.prepared);
-      assert.deepEqual(f.recovery.recreated, []);
-      assert.deepEqual(f.events, []);
-      assert(!f.state.has('ses_archived'));
-      assert.deepEqual(f.reports, []);
-    });
 });
 
 test('desktop refuses queued commands and stops before writes when the plugin unloads during selection', async () => {

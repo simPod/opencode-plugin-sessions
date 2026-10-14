@@ -15,21 +15,8 @@ import {
   type RestoreMapping,
   type RestoreLocation,
   type WorktreePlan,
-  type WorktreeRequest,
-  type WorktreeSnapshot,
 } from './schema.ts';
 import type { WorktreeGateway } from './worktrees.ts';
-
-export interface WorktreeRecovery {
-  source(
-    location: RestoreLocation,
-    saved: WorktreeSnapshot | undefined,
-  ): Promise<WorktreeRequest | undefined>;
-  confirm(
-    plans: WorktreePlan[],
-    snapshots: WorktreeSnapshot[],
-  ): Promise<boolean>;
-}
 
 function locationsFor(transfers: SessionTransferData[]): RestoreLocation[] {
   return Array.from(
@@ -247,8 +234,11 @@ export class SessionArchive {
     id: string,
     expectedFingerprint?: string,
     restoreMappings: RestoreMapping[] = [],
-    recovery?: WorktreeRecovery,
-  ): Promise<{ rootSessionID: string; sessionIDs: string[] } | undefined> {
+  ): Promise<{
+    rootSessionID: string;
+    sessionIDs: string[];
+    recovery?: { worktreeCount: number; dirty: boolean };
+  }> {
     return this.#exclusive(async () => {
       const bundle: ArchiveBundle = Bundle.parse(await this.#storage.read(id));
       if (
@@ -294,7 +284,8 @@ export class SessionArchive {
       if (parentID && !existing.has(parentID))
         throw new Error('Restore the archived session’s parent first.');
       const locations = locationsFor(transfers);
-      if (this.#worktrees && recovery) {
+      let recovery: { worktreeCount: number; dirty: boolean } | undefined;
+      if (this.#worktrees) {
         const missing = await this.#worktrees.missing(locations);
         await this.#validateLocations(
           locations.filter(
@@ -307,7 +298,7 @@ export class SessionArchive {
           ),
         );
         const plans = new Map<string, WorktreePlan>();
-        const snapshots: WorktreeSnapshot[] = [];
+        let dirty = false;
         for (const location of missing) {
           const saved =
             bundle.version === 2
@@ -317,17 +308,17 @@ export class SessionArchive {
                     snapshot.directory === location.directory,
                 )
               : undefined;
-          if (saved) snapshots.push(saved);
-          const request = await recovery.source(location, saved);
-          if (!request) return undefined;
-          if (
-            request.directory !== location.directory ||
-            request.projectID !== location.projectID
-          )
+          if (!saved)
             throw new Error(
-              'Worktree recovery cannot change the restore location.',
+              `The archive lacks a recorded repository and commit for ${location.directory}. Nothing was imported; the archive is retained. Recreate the exact original directory or configure an explicit restore mapping before retrying.`,
             );
-          const plan = await this.#worktrees.prepare(request);
+          dirty ||= saved.dirty;
+          const plan = await this.#worktrees.prepare({
+            ...location,
+            repository: saved.repository,
+            worktree: saved.worktree,
+            ref: saved.commit,
+          });
           const previous = plans.get(plan.worktree);
           if (
             previous &&
@@ -336,19 +327,19 @@ export class SessionArchive {
               previous.projectID !== plan.projectID)
           )
             throw new Error(
-              'Conflicting recovery choices for the same worktree. Nothing was imported.',
+              'Conflicting recorded recovery metadata for the same worktree. Nothing was imported; the archive is retained.',
             );
           plans.set(plan.worktree, plan);
         }
         if (plans.size) {
           const selected = Array.from(plans.values());
-          if (!(await recovery.confirm(selected, snapshots))) return undefined;
-          // Confirm the archive still matches what was presented before creating directories.
+          // Check the archive again after preflight, before creating directories.
           if (fingerprint(await this.#storage.read(id)) !== fingerprint(bundle))
             throw new Error(
               'The archive changed after inspection. Nothing was imported.',
             );
           for (const plan of selected) await this.#worktrees.recreate(plan);
+          recovery = { worktreeCount: selected.length, dirty };
         }
       }
       // Native import derives project identity from the location, not info.projectID.
@@ -384,6 +375,7 @@ export class SessionArchive {
       return {
         rootSessionID: bundle.rootSessionID,
         sessionIDs: bundle.sessions.map((session) => session.info.id),
+        ...(recovery ? { recovery } : {}),
       };
     });
   }

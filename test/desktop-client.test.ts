@@ -110,15 +110,31 @@ test(
       instanceID,
       new AbortController().signal,
     );
-    const answer = await host.ask('ses_owner', 'Select an archive', [
-      {
-        key: 'archive',
-        type: 'string',
-        required: true,
-        custom: true,
-        options: [{ value: 'synthetic-archive', label: 'Archived session' }],
-      },
-    ]);
+    const metadata = {
+      'simpod.session-restore.archives': [
+        {
+          id: 'synthetic-archive',
+          title: 'Archived session',
+          createdAt: 1,
+          rootSessionID: 'ses_archived',
+          sessionCount: 2,
+        },
+      ],
+    };
+    const answer = await host.ask(
+      'ses_owner',
+      'Select an archive',
+      [
+        {
+          key: 'archive',
+          type: 'string',
+          required: true,
+          custom: true,
+          options: [{ value: 'synthetic-archive', label: 'Archived session' }],
+        },
+      ],
+      metadata,
+    );
     assert.deepEqual(answer, { archive: 'synthetic-archive' });
     await host.report(
       'ses_owner',
@@ -126,8 +142,9 @@ test(
       'No session archives in this project.',
     );
     assert.equal(forms.length, 2);
+    assert.deepEqual(forms[0]?.metadata, { ...metadata, kind: 'question' });
+    assert.deepEqual(forms[1]?.metadata, { kind: 'question' });
     for (const form of forms) {
-      assert.deepEqual(form.metadata, { kind: 'question' });
       assert(Array.isArray(form.fields));
       assert.equal(form.fields[0].type, 'string');
     }

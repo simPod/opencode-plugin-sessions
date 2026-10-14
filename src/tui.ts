@@ -5,9 +5,16 @@ import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
 import { Archives } from './rpc.ts';
 import { canRestore } from './restore-storage.ts';
+import {
+  RestorePickerArchives,
+  RestorePickerResult,
+  restorePickerMetadataKey,
+  restorePickerOptions,
+  restoreResultMetadataKey,
+} from './restore-picker.ts';
 import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
-import { worktreeRecovery } from './worktree-recovery.ts';
+import { restoreRecoveryMessage } from './worktree-recovery.ts';
 import type { WorktreeGateway } from './worktrees.ts';
 
 export default Plugin.define({
@@ -211,16 +218,7 @@ export default Plugin.define({
         if (targetSessionID && single) {
           id = single.id;
         } else {
-          id = await context.ui.dialog.select({
-            title: 'Session archives — select to restore',
-            placeholder: 'Search archived session titles',
-            options: archives.map((archive) => ({
-              title: archive.title,
-              value: archive.id,
-              description: `${archive.sessionCount} session(s) · ${new Date(archive.createdAt).toLocaleString()}`,
-              footer: `Archive: ${archive.id} · Root: ${archive.rootSessionID}`,
-            })),
-          });
+          id = await context.ui.dialog.select(restorePickerOptions(archives));
           if (!id) return;
           if (!archives.some((archive) => archive.id === id))
             throw new Error(
@@ -245,34 +243,7 @@ export default Plugin.define({
         id,
         fingerprint(bundle),
         restoreMappings,
-        worktreeRecovery({
-          async source(directory) {
-            const repository = await context.ui.dialog.prompt({
-              title: 'Existing repository on the server',
-              description: `The restore directory is missing: ${directory}`,
-              placeholder: '/absolute/path/to/repository',
-            });
-            if (repository === undefined) return undefined;
-            const ref = await context.ui.dialog.prompt({
-              title: 'Branch or commit',
-            });
-            if (ref === undefined) return undefined;
-            const worktree = await context.ui.dialog.prompt({
-              title: 'Worktree root to recreate',
-              value: directory,
-            });
-            if (worktree === undefined) return undefined;
-            return { repository, ref, worktree };
-          },
-          confirm: async (message) =>
-            (await context.ui.dialog.confirm({
-              title: 'Confirm worktree recreation',
-              message,
-              label: { confirm: 'Recreate and restore', cancel: 'Cancel' },
-            })) === true,
-        }),
       );
-      if (!restored) return;
       for (const sessionID of restored.sessionIDs)
         context.data.session.invalidate(sessionID);
       try {
@@ -293,10 +264,87 @@ export default Plugin.define({
       });
       context.ui.toast.show({
         title: 'Session tree restored',
-        message: `${restored.sessionIDs.length} session(s). The archive file is retained.`,
+        message: `${restored.sessionIDs.length} session(s). The archive file is retained.${restoreRecoveryMessage(restored.recovery)}`,
         variant: 'success',
       });
     }
+
+    // Slash commands remain server-owned. Marked selection and result forms
+    // get terminal presentation without running restoration a second time.
+    const stopRestorePicker = context.data.on('form.created', (event) => {
+      const form = event.data.form;
+      const route = context.ui.router.current();
+      if (route.type !== 'session' || route.sessionID !== form.sessionID)
+        return;
+      const location = event.location;
+      const result = RestorePickerResult.safeParse(
+        form.metadata?.[restoreResultMetadataKey],
+      );
+      if (result.success) {
+        void (async () => {
+          try {
+            await context.data.session.form.reply(
+              {
+                sessionID: form.sessionID,
+                formID: form.id,
+                answer: { acknowledged: 'done' },
+              },
+              location,
+            );
+            for (const sessionID of result.data.sessionIDs)
+              context.data.session.invalidate(sessionID);
+            await Promise.all(
+              result.data.sessionIDs.map((sessionID) =>
+                context.data.session.sync(sessionID),
+              ),
+            );
+            lifetime.signal.throwIfAborted();
+            const current = context.ui.router.current();
+            if (
+              current.type === 'session' &&
+              current.sessionID === form.sessionID
+            ) {
+              context.ui.tabs.open(result.data.rootSessionID);
+              context.ui.router.navigate({
+                type: 'session',
+                sessionID: result.data.rootSessionID,
+              });
+            }
+            context.ui.toast.show({
+              title: 'Session tree restored',
+              message: result.data.message,
+              variant: 'success',
+            });
+          } catch {
+            context.ui.toast.show({
+              title: 'Session tree restored',
+              message: `The tree was restored, but the TUI could not refresh it. Reopen ${result.data.rootSessionID}; do not restore it again.`,
+              variant: 'warning',
+            });
+          }
+        })();
+        return;
+      }
+      const archives = RestorePickerArchives.safeParse(
+        form.metadata?.[restorePickerMetadataKey],
+      );
+      if (!archives.success) return;
+      void operate(async () => {
+        const id = await context.ui.dialog.select(
+          restorePickerOptions(archives.data),
+        );
+        lifetime.signal.throwIfAborted();
+        const input = { sessionID: form.sessionID, formID: form.id };
+        if (id === undefined) {
+          await context.data.session.form.cancel(input, location);
+        } else {
+          await context.data.session.form.reply(
+            { ...input, answer: { archive: id } },
+            location,
+          );
+        }
+      });
+    });
 
     // The server owns slash entries in both clients. TUI entries are palette-only
     // because OpenCode combines both slash lists without deduplicating names.
@@ -332,6 +380,9 @@ export default Plugin.define({
         },
       ],
     }));
-    return () => lifetime.abort();
+    return () => {
+      stopRestorePicker();
+      lifetime.abort();
+    };
   },
 });

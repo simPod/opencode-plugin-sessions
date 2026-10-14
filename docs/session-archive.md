@@ -37,27 +37,39 @@ a deleted current tree and close its tabs without closing unrelated tabs.
 
 Each command must appear once in the TUI slash-command list, even when both the
 server and TUI plugins are loaded. The server owns slash-command callbacks in
-both clients. Keep the TUI's dialogs and navigation in palette-only actions:
-archive and delete act on the open session; restore opens the archive picker.
+both clients. Keep TUI command registrations palette-only. Terminal restore
+recognizes the server's plugin-marked archive-selection forms and presents the
+same searchable picker used by its palette action, then replies to or cancels
+the original form through the connected client. The server performs restoration
+once; the terminal bridge must not invoke another restore operation.
+
+Keep archive rows compact: title, session count, and short archive date without
+long IDs. Search must match title words, root session IDs, and archive IDs,
+case-insensitively, while retaining newest-first order. Use native keyboard
+navigation and scrolling; a cancelled picker makes no changes.
 
 Session-ID lookup matches any saved root or descendant in archives available to
 the current project, including explicitly mapped sources. Restore the whole
 saved family immediately when exactly one archive matches. For multiple matches,
-show only those archives in the picker; never choose one automatically. No match,
-cancellation, or a selection outside the matching set must not import sessions.
-Keep archive UUID input compatible. Before import, check that the selected
-archive still contains the supplied session ID. Do not widen project scope or
-change saved files, archive identity, or restoration safeguards for this lookup.
+show only those archives in the picker; never choose one automatically. No
+match, cancellation, or a selection outside the matching set must not import
+sessions. Keep archive UUID input compatible. Before import, check that the
+selected archive still contains the supplied session ID. Do not widen project
+scope or change saved files, archive identity, or restoration safeguards for
+this lookup.
 
-Server commands must appear in both clients' slash-command lists. Use native
-question forms for archive selection and results. Archive, ordinary restore,
-and delete run without confirmation in both desktop and TUI. Selecting an archive restores it
-immediately; cancelling the archive picker makes no changes. Commands cannot be
-queued. After archiving or deleting the open session, the user can open another session from
-the session list; restoring through a slash command makes the original sessions
-available in the session list without automatic navigation. TUI palette archive
-leaves the archived chat, palette delete leaves the deleted chat, and palette
-restore opens the restored session.
+Server commands must appear in both clients' slash-command lists. Desktop uses
+native question forms for archive selection and results. Terminal restore
+automatically acknowledges its marked result form, refreshes the restored
+family, opens the restored root if the user is still viewing the invoking
+session, and shows a toast. Other slash-command results retain native forms.
+Archive, restore, and delete run without confirmation in both desktop and TUI.
+Selecting an archive restores it immediately; cancelling the archive picker
+makes no changes. Commands cannot be queued. After archiving or deleting the
+open session, the user can open another session from the session list; desktop
+restore makes the original sessions available without automatic navigation. TUI
+palette archive leaves the archived chat, palette delete leaves the deleted
+chat, and palette restore opens the restored session.
 
 Storage defaults to `~/.opencode-session-archives` on the connected server and
 remains configurable through `storageDirectory`. Project folders use a readable
@@ -76,20 +88,24 @@ The default is no mappings. Apply each match once; do not infer projects, match
 directory prefixes, or chain rules. Reject duplicate source pairs. Desktop and
 TUI use the same server configuration, without new commands or confirmations.
 
-When an effective restore location is missing, offer explicit Git worktree
-recreation. New version-2 archives record linked-worktree repository, root,
-commit, branch label, and dirty state. Keep version-1 archives readable; request
-an existing server repository, branch or commit, and root when metadata is
-absent. Show the resolved commit and all destinations before creation, and
-require an explicit confirmation. Cancelling input or confirmation must make no
-changes. Use detached worktrees without moving branches, replacing paths,
-fetching, running Git hooks or configured filters, or running startup commands.
-Match the source repository to the expected project and recheck all resulting
-session locations before import. Never create arbitrary missing non-Git
-directories. Warn that only committed files are recreated and that dirty files,
-dependencies, and env files are not saved. Keep created worktrees after partial
-failure for manual inspection. Recovery is executed on the server; TUI clients
-must not run local Git commands.
+When an effective restore location is missing, automatically recreate its Git
+worktree from exactly matching recorded project/directory metadata, without
+repository, commit, path, or confirmation questions. New version-2 archives
+record linked-worktree repository, root, commit, branch label, and dirty state.
+Use the recorded commit, never the saved branch's current tip. Keep version-1
+archives readable when their locations exist. Missing metadata for any effective
+location, including a mapped destination, must stop restoration before all
+creation and import. Retain the archive and explain that the original directory
+must be recreated or explicitly mapped to an existing destination. Do not guess
+a repository or commit. Preflight every target before creation. Use detached
+worktrees without moving branches, replacing paths, fetching, running Git hooks
+or configured filters, or running startup commands. Match the source repository
+to the expected project and recheck all resulting session locations before
+import. Never create arbitrary missing non-Git directories. Report that only
+committed files are recreated and that dependencies and env files are not saved;
+warn about dirty files in the completed result when the recovered metadata marks
+them dirty. Keep created worktrees after partial failure for manual inspection.
+Recovery is executed on the server; TUI clients must not run local Git commands.
 
 Mapped restore changes only imported project IDs and directories; retain session
 IDs, parent links, transcripts, and original archive bytes. Mapped root archives
@@ -157,12 +173,19 @@ descendant session IDs, retained UUID input, a matching-only picker for repeated
 archives, and no import for missing IDs or cancelled or invalid matching
 selections. Delete coverage must include current and explicit targets,
 cross-project descendants, immediate deletion without confirmation, changed-tree
-refusal, scope and lifetime checks, failure reporting, retained archive files, and TUI
-navigation and tab cleanup. Server coverage must show filtered summary RPCs,
-without returning transcript bodies or expanding project scope. Desktop coverage must also show
-command registration, cancellable archive selection, native question form
-compatibility, and refusal of a connection to a different server. TUI coverage
-must show palette actions with no slash registrations. Slash commands require a
+refusal, scope and lifetime checks, failure reporting, retained archive files,
+and TUI navigation and tab cleanup. Server coverage must show filtered summary
+RPCs, without returning transcript bodies or expanding project scope. Desktop
+coverage must also show command registration, cancellable archive selection,
+native question form compatibility, and refusal of a connection to a different
+server. TUI coverage must show palette actions with no slash registrations and
+marked-form transport for terminal archive selection, cancellation, result
+acknowledgement and navigation without a second restore, and a warning when
+post-restore refresh fails. Search coverage must distinguish title-word
+matching, root-ID and archive-ID matching, newest-first ordering, and no
+matching results. Automatic recovery coverage must distinguish exact saved
+commits, shared-root deduplication, full preflight refusal, missing metadata,
+and existing-location restoration without recovery. Slash commands require a
 managed service registration on their host; standalone and embedded servers fail
 closed. TUI palette actions retain remote and standalone support. The
 repository is public; the package remains unpublished on npm. Install the built
@@ -172,4 +195,7 @@ checkout only after the user chooses to enable it. See
 [ADR 0006](adr/0006-explicit-restore-relocations.md) and
 [ADR 0007](adr/0007-server-owned-slash-commands.md) and
 [ADR 0008](adr/0008-immediate-session-deletion.md) and
-[ADR 0009](adr/0009-confirmed-worktree-recreation.md).
+[ADR 0009](adr/0009-confirmed-worktree-recreation.md). These terminal and
+automatic-recovery requirements are implemented by
+[ADR 0010](adr/0010-terminal-restore-and-automatic-recovery.md), which
+supersedes ADR 0009's interactive recovery decision.

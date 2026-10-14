@@ -3,6 +3,7 @@ import {
   OpenCode,
   type FormAnswer,
   type FormFields,
+  type FormMetadata,
   type LocationRef,
 } from '@opencode/client';
 import { Service } from '@opencode/client/service';
@@ -15,8 +16,14 @@ export interface DesktopHost {
     sessionID: string,
     title: string,
     fields: FormFields,
+    metadata?: FormMetadata,
   ): Promise<FormAnswer | undefined>;
-  report(sessionID: string, title: string, message: string): Promise<void>;
+  report(
+    sessionID: string,
+    title: string,
+    message: string,
+    metadata?: FormMetadata,
+  ): Promise<void>;
 }
 
 export async function desktopClient(
@@ -50,9 +57,14 @@ export async function desktopClient(
 
   return {
     sessions: gateway(client, signal),
-    async ask(sessionID, title, fields) {
+    async ask(sessionID, title, fields, metadata) {
       const form = await client.session.form.create(
-        { sessionID, title, metadata: { kind: 'question' }, fields },
+        {
+          sessionID,
+          title,
+          metadata: { ...metadata, kind: 'question' },
+          fields,
+        },
         { signal },
       );
       const timeout = AbortSignal.timeout(10 * 60_000);
@@ -78,12 +90,12 @@ export async function desktopClient(
           .catch(() => {});
       }
     },
-    async report(sessionID, title, message) {
+    async report(sessionID, title, message, metadata) {
       await client.session.form.create(
         {
           sessionID,
           title,
-          metadata: { kind: 'question' },
+          metadata: { ...metadata, kind: 'question' },
           fields: [
             {
               key: 'acknowledged',

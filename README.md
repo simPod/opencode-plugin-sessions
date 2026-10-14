@@ -38,14 +38,23 @@ the archive's root and all saved descendants, not only that session.
 old command names are not aliases. Existing archive files and IDs are unchanged.
 
 Archive, restore, and delete run without confirmation in both desktop and TUI.
-Selecting an archive restores it immediately; cancelling the archive picker makes no
-changes. Slash commands use native question panels for archive selection and
-results in both desktop and TUI. Commands run immediately and cannot be queued.
-Result panels require acknowledgement, not
-approval of the completed operation. After archiving or deleting the open session
-through a slash command, open another session from the session list afterward.
-Slash-based restore returns sessions to the list but does not automatically open
-them in either client.
+Selecting an archive restores it immediately; cancelling the picker makes no
+changes. Commands run immediately and cannot be queued.
+
+Terminal restore uses a compact, searchable picker. Type to match a title, root
+session ID, or archive ID. Results stay newest first. Use Up/Down,
+Ctrl+P/Ctrl+N, Page Up/Page Down, Home/End, Enter to restore, or Escape to
+cancel. The terminal opens the restored session and shows a toast without
+another acknowledgement. Desktop restore keeps native question panels and
+returns restored sessions to the list without opening them. Other slash-command
+result panels require acknowledgement, not approval of the completed operation.
+After archiving or deleting the open session through a slash command, open
+another session from the session list afterward.
+
+The terminal picker handles forms for the visible session. OpenCode does not
+identify the client that started a form; another client viewing that session can
+also see or answer it. Use one client for restore. If the plugin reloads during
+selection, the pending form remains available in the native question UI.
 
 Submitting `/session-delete` or running its TUI palette action starts deletion
 without an approval step or a later cancellation step. Unlike archive, delete
@@ -60,8 +69,8 @@ also deleted. Use `/session-archive` to keep a restorable transcript.
 
 The TUI command palette retains **Archive session tree**, **Restore session
 archive**, and **Delete session tree permanently** under **Session archives**.
-Restore uses a TUI picker and opens the restored session. Archive and delete act
-on the open session and leave the removed chat.
+Restore uses the same searchable TUI picker and opens the restored session.
+Archive and delete act on the open session and leave the removed chat.
 
 Slash commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its
@@ -127,30 +136,35 @@ incompatible Effect release candidate and fail to load in OpenCode 2.0.27.
 
 ## Restore after a rename or removed worktree
 
-Restore offers to recreate missing Git worktrees before importing sessions. New
-version-2 archives record each linked worktree's repository, commit, branch
-label, and whether it contained uncommitted or untracked files. Version-1
-archives remain readable; for a missing location, enter an existing repository
-on the server, a branch or commit, and the worktree root. A session can point
-inside that root.
+Restore automatically recreates missing Git worktrees before importing sessions,
+without asking for a repository, commit, path, or confirmation. Version-2
+archives record each linked worktree's repository, exact commit, root, branch
+label, and whether it contained uncommitted or untracked files. Recovery uses
+that exact recorded project and directory, not the branch's current tip. A
+session can point inside the recorded worktree root.
 
-Review the exact repository, destination, and resolved commit, then choose
-**Recreate and restore**. Cancelling any input or confirmation creates no
-worktrees and imports no sessions. Recreation uses detached Git worktrees so
-existing branches do not move. It does not overwrite paths, force stale Git
-registrations, fetch repositories, or run Git hooks, configured checkout
-filters, or OpenCode startup commands. Filter-managed content such as Git LFS
-files stays in its committed form until you explicitly run the relevant tool.
-Recovery requires the hosting server's managed-service registration; ordinary
-TUI archive and restore remain available without it.
+Version-1 archives remain readable when their locations exist. If any missing
+location lacks recorded recovery details, restoration stops before any worktree
+creation or session import and retains the archive. Recreate the original
+directory or configure an explicit mapping to an existing destination; the
+plugin does not ask for manual details or guess a commit. This also applies to
+missing mapped destinations.
+
+Recreation uses detached Git worktrees so existing branches do not move. It does
+not overwrite paths, force stale Git registrations, fetch repositories, or run
+Git hooks, configured checkout filters, or OpenCode startup commands.
+Filter-managed content such as Git LFS files stays in its committed form until
+you explicitly run the relevant tool. Recovery requires the hosting server's
+managed-service registration; ordinary TUI archive and restore remain available
+without it.
 
 These archives are not project backups. Only committed files are recreated;
 uncommitted files, untracked files, dependencies, and local environment files
-are not restored. A dirty-worktree snapshot adds a warning to the confirmation.
-If creation or later restore checks fail, keep the archive and any created
-worktrees for inspection; the plugin does not automatically remove them. All
-restore locations must still match their expected projects before any session is
-imported.
+are not restored. The completed result reports recovery limits and warns when
+the archived worktree contained uncommitted or untracked files. If creation or
+later restore checks fail, keep the archive and any created worktrees for
+inspection; the plugin does not automatically remove them. All restore locations
+must still match their expected projects before any session is imported.
 
 Optional server plugin `restoreMappings` explicitly relocate archived sessions.
 The default is `[]`: restore uses the original project and directory.

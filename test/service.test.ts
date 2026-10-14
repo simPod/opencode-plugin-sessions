@@ -871,28 +871,33 @@ function worktreeFixture() {
     dirty: true,
   };
   f.sessions.item('ses_grandchild').info.location.directory =
-    snapshot.directory;
+    `${snapshot.directory}/nested`;
+  f.sessions.projects.set(`${snapshot.directory}/nested`, snapshot.projectID);
   const recreated: WorktreePlan[] = [];
   const worktrees: WorktreeGateway = {
     capture: async (locations) =>
       locations
-        .filter((location) => location.directory === snapshot.directory)
-        .map(() => snapshot),
+        .filter((location) => location.directory.startsWith(snapshot.directory))
+        .map((location) => ({ ...snapshot, directory: location.directory })),
     missing: async (locations) =>
       locations.filter((location) =>
-        f.sessions.unavailableDirectories.has(location.directory),
+        [...f.sessions.unavailableDirectories].some(
+          (directory) =>
+            location.directory === directory ||
+            location.directory.startsWith(`${directory}/`),
+        ),
       ),
     prepare: async (request) => ({
       projectID: request.projectID,
       directory: request.directory,
       worktree: request.worktree,
       repository: request.repository,
-      commit: request.ref === 'feature' ? 'b'.repeat(40) : request.ref,
+      commit: request.ref,
     }),
     async recreate(plan) {
       f.events.push('recreate');
       recreated.push(plan);
-      f.sessions.unavailableDirectories.delete(plan.directory);
+      f.sessions.unavailableDirectories.delete(plan.worktree);
     },
   };
   return {
@@ -903,85 +908,183 @@ function worktreeFixture() {
   };
 }
 
-test('restores a shared missing worktree only after confirming the saved commit or an explicit legacy source', async (t) => {
-  for (const legacy of [false, true])
-    await t.test(
-      legacy ? 'version 1 archive' : 'saved Git metadata',
-      async () => {
-        const f = worktreeFixture();
-        const saved = await f.service.archive(
-          await f.service.preview('ses_root'),
-        );
-        const stored = onlyBundle(f.storage);
-        assert.equal(stored.version, 2);
-        if (stored.version !== 2) assert.fail('Expected worktree metadata');
-        assert.deepEqual(stored.worktrees, [f.snapshot]);
-        if (legacy) {
-          const { worktrees: _worktrees, ...fields } = stored;
-          f.storage.bundles.set(saved.id, { ...fields, version: 1 });
-        }
-        const original = structuredClone(onlyBundle(f.storage));
-        f.sessions.unavailableDirectories.add(f.snapshot.directory);
-        const result = await f.service.restore(saved.id, undefined, [], {
-          async source(location, snapshot) {
-            assert.deepEqual(location, {
-              directory: f.snapshot.directory,
-              projectID: 'project-a',
-            });
-            assert.deepEqual(snapshot, legacy ? undefined : f.snapshot);
-            return {
-              ...location,
-              repository: f.snapshot.repository,
-              worktree: f.snapshot.worktree,
-              ref: snapshot?.commit ?? 'feature',
-            };
-          },
-          async confirm(plans, snapshots) {
-            assert.equal(f.recreated.length, 0);
-            assert.equal(f.sessions.imports.length, 0);
-            assert.equal(plans.length, 1);
-            assert.equal(plans[0]?.commit, (legacy ? 'b' : 'a').repeat(40));
-            assert.deepEqual(snapshots, legacy ? [] : [f.snapshot]);
-            return true;
-          },
-        });
-        assert.deepEqual(result, {
-          rootSessionID: 'ses_root',
-          sessionIDs: familyIDs,
-        });
-        assert.equal(f.recreated.length, 1);
-        assert(
-          f.events.indexOf('recreate') < f.events.indexOf('import:ses_root'),
-        );
-        assert.deepEqual(onlyBundle(f.storage), original);
-      },
-    );
+test('automatically restores a shared missing worktree at its recorded commit before importing parent first', async () => {
+  const f = worktreeFixture();
+  const saved = await f.service.archive(await f.service.preview('ses_root'));
+  const stored = onlyBundle(f.storage);
+  assert(stored.version === 2);
+  const nestedSnapshot = stored.worktrees[1];
+  assert(nestedSnapshot);
+  nestedSnapshot.dirty = false;
+  const original = structuredClone(onlyBundle(f.storage));
+  assert(original.version === 2);
+  assert.deepEqual(original.worktrees, [
+    f.snapshot,
+    {
+      ...f.snapshot,
+      directory: `${f.snapshot.directory}/nested`,
+      dirty: false,
+    },
+  ]);
+  f.sessions.unavailableDirectories.add(f.snapshot.directory);
+  const result = await f.service.restore(saved.id);
+  assert.deepEqual(result, {
+    rootSessionID: 'ses_root',
+    sessionIDs: familyIDs,
+    recovery: { worktreeCount: 1, dirty: true },
+  });
+  assert.deepEqual(f.recreated, [
+    {
+      projectID: f.snapshot.projectID,
+      directory: `${f.snapshot.directory}/nested`,
+      repository: f.snapshot.repository,
+      worktree: f.snapshot.worktree,
+      commit: f.snapshot.commit,
+    },
+  ]);
+  assert.deepEqual(
+    f.events.filter(
+      (event) => event === 'recreate' || event.startsWith('import:'),
+    ),
+    [
+      'recreate',
+      'import:ses_root',
+      'import:ses_child',
+      'import:ses_grandchild',
+    ],
+  );
+  assert.deepEqual(onlyBundle(f.storage), original);
 });
 
-test('cancelled worktree input or confirmation does not create directories or import sessions', async (t) => {
-  for (const cancelSource of [false, true])
-    await t.test(cancelSource ? 'source input' : 'confirmation', async () => {
+test('restore at existing worktrees does not report recovery even when the saved snapshot was dirty', async () => {
+  const f = worktreeFixture();
+  const saved = await f.service.archive(await f.service.preview('ses_root'));
+  assert.deepEqual(await f.service.restore(saved.id), {
+    rootSessionID: 'ses_root',
+    sessionIDs: familyIDs,
+  });
+  assert.deepEqual(f.recreated, []);
+});
+
+test('recovery preflights every recorded source and rejects conflicts before creating any worktree', async (t) => {
+  for (const failure of [
+    'invalid source',
+    'conflicting commit',
+    'changed archive',
+  ])
+    await t.test(failure, async () => {
       const f = worktreeFixture();
       const saved = await f.service.archive(
         await f.service.preview('ses_root'),
       );
+      const stored = onlyBundle(f.storage);
+      assert(stored.version === 2);
+      const grandchild = stored.sessions[2];
+      assert(grandchild);
+      grandchild.info.location.directory = '/synthetic/nested';
+      stored.worktrees = [
+        f.snapshot,
+        {
+          ...f.snapshot,
+          directory: '/synthetic/nested',
+          ...(failure === 'conflicting commit'
+            ? { commit: 'b'.repeat(40) }
+            : {}),
+        },
+      ];
       f.sessions.unavailableDirectories.add(f.snapshot.directory);
-      const result = await f.service.restore(saved.id, undefined, [], {
-        source: async (location) =>
-          cancelSource
-            ? undefined
-            : {
-                ...location,
-                repository: f.snapshot.repository,
-                worktree: f.snapshot.worktree,
-                ref: f.snapshot.commit,
-              },
-        confirm: async () => false,
-      });
-      assert.equal(result, undefined);
-      assert.deepEqual(f.recreated, []);
+      f.sessions.unavailableDirectories.add('/synthetic/nested');
+      const worktrees: WorktreeGateway = {
+        capture: async () => [],
+        missing: async (locations) =>
+          locations.filter((location) =>
+            f.sessions.unavailableDirectories.has(location.directory),
+          ),
+        async prepare(request) {
+          if (request.directory === '/synthetic/nested') {
+            if (failure === 'invalid source')
+              throw new Error('The source repository is unavailable');
+            if (failure === 'changed archive') stored.createdAt++;
+          }
+          return {
+            projectID: request.projectID,
+            directory: request.directory,
+            worktree: request.worktree,
+            repository: request.repository,
+            commit: request.ref,
+          };
+        },
+        recreate: async () =>
+          assert.fail('Preflight must finish before recreation'),
+      };
+      await assert.rejects(
+        new SessionArchive(f.sessions, f.storage, worktrees).restore(saved.id),
+        failure === 'invalid source'
+          ? /source repository is unavailable/
+          : failure === 'conflicting commit'
+            ? /Conflicting recorded recovery metadata/
+            : /archive changed after inspection/,
+      );
       assert.deepEqual(f.sessions.imports, []);
       assert(f.storage.bundles.has(saved.id));
+    });
+});
+
+test('missing recorded metadata for any target prevents all recreation and imports', async (t) => {
+  for (const mode of [
+    'legacy',
+    'missing descendant metadata',
+    'mapped destination',
+    'wrong metadata project',
+    'directory prefix',
+  ])
+    await t.test(mode, async () => {
+      const f = worktreeFixture();
+      const saved = await f.service.archive(
+        await f.service.preview('ses_root'),
+      );
+      const stored = onlyBundle(f.storage);
+      assert(stored.version === 2);
+      const mappings: RestoreMapping[] = [];
+      f.sessions.unavailableDirectories.add(f.snapshot.directory);
+      if (mode === 'legacy') {
+        const { worktrees: _worktrees, ...fields } = stored;
+        f.storage.bundles.set(saved.id, { ...fields, version: 1 });
+      } else if (mode === 'missing descendant metadata') {
+        const grandchild = stored.sessions[2];
+        assert(grandchild);
+        stored.worktrees = [f.snapshot];
+        grandchild.info.location.directory = '/synthetic/unsaved';
+        f.sessions.unavailableDirectories.add('/synthetic/unsaved');
+      } else if (mode === 'mapped destination') {
+        mappings.push({
+          from: { projectID: 'project-a', directory: f.snapshot.directory },
+          to: { projectID: 'project-a', directory: '/synthetic/mapped' },
+        });
+        f.sessions.unavailableDirectories.add('/synthetic/mapped');
+      } else {
+        const destination = {
+          projectID:
+            mode === 'wrong metadata project' ? 'project-other' : 'project-a',
+          directory:
+            mode === 'directory prefix'
+              ? '/synthetic/ses_child/other'
+              : f.snapshot.directory,
+        };
+        mappings.push({
+          from: { projectID: 'project-a', directory: f.snapshot.directory },
+          to: destination,
+        });
+        f.sessions.unavailableDirectories.add(destination.directory);
+      }
+      const original = structuredClone(onlyBundle(f.storage));
+      await assert.rejects(
+        f.service.restore(saved.id, undefined, mappings),
+        /archive lacks a recorded repository and commit.*Nothing was imported.*archive is retained.*exact original directory.*explicit restore mapping/,
+      );
+      assert.deepEqual(f.recreated, []);
+      assert.deepEqual(f.sessions.imports, []);
+      assert.deepEqual(onlyBundle(f.storage), original);
     });
 });
 
@@ -990,13 +1093,7 @@ test('an existing destination with the wrong project blocks recovery before file
   const saved = await f.service.archive(await f.service.preview('ses_root'));
   f.sessions.unavailableDirectories.add(f.snapshot.directory);
   f.sessions.projects.set('/synthetic/ses_root', 'project-other');
-  await assert.rejects(
-    f.service.restore(saved.id, undefined, [], {
-      source: async () => assert.fail('No recovery prompts should be shown'),
-      confirm: async () => assert.fail('No confirmation should be shown'),
-    }),
-    /another project/,
-  );
+  await assert.rejects(f.service.restore(saved.id), /another project/);
   assert.deepEqual(f.recreated, []);
   assert.deepEqual(f.sessions.imports, []);
 });

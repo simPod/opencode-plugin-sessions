@@ -2,7 +2,13 @@ import { strict as assert } from 'node:assert';
 import { execFile } from 'node:child_process';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
-import type { LocationRef, SessionTransferData } from '@opencode/client';
+import type {
+  LocationRef,
+  OpenCodeEvent,
+  SessionFormCancelInput,
+  SessionFormReplyInput,
+  SessionTransferData,
+} from '@opencode/client';
 import type { Plugin } from '@opencode/plugin/tui';
 import type { ArchiveBundle } from '../src/schema.ts';
 
@@ -154,7 +160,10 @@ async function scenario(pluginURL: string) {
         commands = factory().commands;
       },
     },
-    data: { session: { invalidate: () => {}, sync: async () => {} } },
+    data: {
+      on: () => () => {},
+      session: { invalidate: () => {}, sync: async () => {} },
+    },
     ui: {
       router: {
         current: () => route,
@@ -445,7 +454,303 @@ test('TUI palette actions archive, restore, and delete immediately without dupli
   assert.match(result.stdout, /completed without confirmation/);
 });
 
-test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit confirmation', async (t) => {
+async function pickerScenario(pluginURL: string) {
+  const assert: typeof import('node:assert').strict = (
+    await import('node:assert')
+  ).strict;
+  const { default: plugin }: typeof import('../src/tui.ts') = await import(
+    pluginURL
+  );
+  type Layer = ReturnType<Parameters<Plugin.Context['keymap']['layer']>[0]>;
+  type Picker = Parameters<Plugin.Context['ui']['dialog']['select']>[0];
+  let commands: Layer['commands'];
+  let picker: Picker | undefined;
+  const older = {
+    id: 'dc7a0ecb-00e6-451e-90a5-8338d3862f90',
+    rootSessionID: 'ses_older',
+    title: 'Release notes',
+    createdAt: 1_700_000_000_000,
+    sessionCount: 1,
+  };
+  const newer = {
+    id: 'efc6dac0-4055-4bb2-9438-8ba375cbe008',
+    rootSessionID: 'ses_newer',
+    title: 'Release API changes',
+    createdAt: older.createdAt + 86_400_000,
+    sessionCount: 3,
+  };
+  const cleanup = await plugin.setup({
+    location: { directory: '/synthetic/project' },
+    client: {
+      location: { get: async () => ({ project: { id: 'test-project' } }) },
+      rpc: () => ({
+        restoreMappings: async () => [],
+        list: async () => [older, newer],
+        read: () =>
+          assert.fail('Cancelling the picker must not read an archive'),
+      }),
+    },
+    keymap: {
+      layer: (factory: () => Layer) => {
+        commands = factory().commands;
+      },
+    },
+    data: { on: () => () => {} },
+    ui: {
+      router: { current: () => ({ type: 'home' }) },
+      dialog: {
+        select: async (options: Picker) => {
+          picker = options;
+        },
+      },
+      toast: {
+        show: () => assert.fail('Cancelling must not report a restore'),
+      },
+    },
+  } as unknown as Plugin.Context);
+  assert(commands);
+  const restore = commands.find(
+    (command) => command.id === 'simpod.session-archive.restore',
+  );
+  assert(restore);
+  await restore.run();
+  assert(picker);
+  assert(picker.search);
+  const selectedPicker = picker;
+  const search = picker.search;
+  const values = (query: string) =>
+    search(query, selectedPicker.options).map((option) => option.value);
+  assert.deepEqual(values(''), [newer.id, older.id]);
+  assert.deepEqual(values('  API RELEASE  '), [newer.id]);
+  assert.deepEqual(values('SES_OLDER'), [older.id]);
+  assert.deepEqual(values(newer.id.slice(0, 8)), [newer.id]);
+  assert.deepEqual(values('missing title'), []);
+  assert(typeof cleanup === 'function');
+  await cleanup();
+}
+
+test('TUI restore picker searches titles and IDs while keeping newest archives first', async () => {
+  const script = `await (${pickerScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
+  await execute(
+    process.execPath,
+    ['--experimental-strip-types', '--input-type=module', '-e', script],
+    { timeout: 5_000 },
+  );
+});
+
+async function slashPickerScenario(
+  pluginURL: string,
+  outcome: 'select' | 'cancel' | 'result' | 'refresh-error',
+) {
+  const assert: typeof import('node:assert').strict = (
+    await import('node:assert')
+  ).strict;
+  const { default: plugin }: typeof import('../src/tui.ts') = await import(
+    pluginURL
+  );
+  type Created = Extract<OpenCodeEvent, { type: 'form.created' }>;
+  type Picker = Parameters<Plugin.Context['ui']['dialog']['select']>[0];
+  const location = {
+    directory: '/synthetic/project',
+    workspaceID: 'workspace',
+  };
+  const archive = {
+    id: 'dc7a0ecb-00e6-451e-90a5-8338d3862f90',
+    rootSessionID: 'ses_restored',
+    title: 'Archived session',
+    createdAt: 1_700_000_000_000,
+    sessionCount: 2,
+  };
+  let receive: ((event: Created) => void) | undefined;
+  let unsubscribed = false;
+  let picker: Picker | undefined;
+  let route = { type: 'session', sessionID: 'ses_owner' };
+  const replies: SessionFormReplyInput[] = [];
+  const cancellations: SessionFormCancelInput[] = [];
+  const refreshed: string[] = [];
+  const opened: string[] = [];
+  const toasts: Array<Parameters<Plugin.Context['ui']['toast']['show']>[0]> =
+    [];
+  let finish: (() => void) | undefined;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const complete = () => {
+    assert(finish);
+    finish();
+  };
+  const cleanup = await plugin.setup({
+    client: { rpc: () => ({}) },
+    keymap: { layer: () => {} },
+    data: {
+      on: (_type: string, handler: NonNullable<typeof receive>) => {
+        receive = handler;
+        return () => {
+          unsubscribed = true;
+        };
+      },
+      session: {
+        invalidate: (sessionID: string) => refreshed.push(sessionID),
+        sync: async () => {
+          if (outcome === 'refresh-error')
+            throw new Error('Refresh unavailable');
+        },
+        form: {
+          reply: async (input: SessionFormReplyInput, scope: LocationRef) => {
+            assert.deepEqual(scope, location);
+            replies.push(input);
+            if (outcome === 'select') complete();
+          },
+          cancel: async (input: SessionFormCancelInput, scope: LocationRef) => {
+            assert.deepEqual(scope, location);
+            cancellations.push(input);
+            complete();
+          },
+        },
+      },
+    },
+    ui: {
+      router: {
+        current: () => route,
+        navigate: (next: typeof route) => {
+          route = next;
+        },
+      },
+      tabs: { open: (sessionID: string) => opened.push(sessionID) },
+      dialog: {
+        select: async (options: Picker) => {
+          picker = options;
+          return outcome === 'cancel' ? undefined : archive.id;
+        },
+        confirm: () => assert.fail('Restore must not ask for confirmation'),
+      },
+      toast: {
+        show: (toast: (typeof toasts)[number]) => {
+          toasts.push(toast);
+          complete();
+        },
+      },
+    },
+  } as unknown as Plugin.Context);
+  assert(receive);
+  const event: Created = {
+    id: 'evt_restore',
+    created: 1,
+    type: 'form.created',
+    location,
+    data: {
+      form: {
+        id: 'form_restore',
+        sessionID: 'ses_owner',
+        title: 'Session archives',
+        fields: [
+          {
+            key: 'archive',
+            type: 'string',
+            options: [{ value: archive.id, label: archive.title }],
+          },
+        ],
+        metadata: { 'simpod.session-restore.archives': [archive] },
+      },
+    },
+  };
+  const foreign = structuredClone(event);
+  foreign.data.form.sessionID = 'ses_other';
+  receive(foreign);
+  const unrelated = structuredClone(event);
+  unrelated.data.form.metadata = { kind: 'question' };
+  receive(unrelated);
+
+  if (outcome === 'result' || outcome === 'refresh-error') {
+    event.data.form.metadata = {
+      'simpod.session-restore.result': {
+        rootSessionID: archive.rootSessionID,
+        sessionIDs: ['ses_restored', 'ses_child'],
+        message: '2 sessions restored. Archive retained.',
+      },
+    };
+    event.data.form.fields = [
+      {
+        key: 'acknowledged',
+        type: 'string',
+        options: [{ value: 'done', label: 'Done' }],
+      },
+    ];
+  }
+  receive(event);
+  await finished;
+  if (outcome === 'cancel') {
+    assert.deepEqual(cancellations, [
+      { sessionID: 'ses_owner', formID: 'form_restore' },
+    ]);
+    assert.deepEqual(replies, []);
+  } else {
+    assert.deepEqual(replies, [
+      {
+        sessionID: 'ses_owner',
+        formID: 'form_restore',
+        answer:
+          outcome === 'select'
+            ? { archive: archive.id }
+            : { acknowledged: 'done' },
+      },
+    ]);
+  }
+  if (outcome === 'select' || outcome === 'cancel') {
+    assert(picker);
+    assert.deepEqual(
+      picker.options.map((option) => option.value),
+      [archive.id],
+    );
+    assert.deepEqual(toasts, []);
+    assert.deepEqual(route, { type: 'session', sessionID: 'ses_owner' });
+  } else {
+    assert.equal(picker, undefined);
+    assert.deepEqual(refreshed, ['ses_restored', 'ses_child']);
+    assert.deepEqual(opened, outcome === 'result' ? ['ses_restored'] : []);
+    assert.equal(
+      route.sessionID,
+      outcome === 'result' ? 'ses_restored' : 'ses_owner',
+    );
+    assert.equal(
+      toasts.at(-1)?.variant,
+      outcome === 'result' ? 'success' : 'warning',
+    );
+    if (outcome === 'refresh-error')
+      assert.match(toasts.at(-1)?.message ?? '', /do not restore it again/);
+  }
+  assert(typeof cleanup === 'function');
+  await cleanup();
+  assert(unsubscribed);
+}
+
+test('terminal slash restore answers or cancels only its marked archive form', async (t) => {
+  for (const outcome of ['select', 'cancel'] as const) {
+    await t.test(outcome, async () => {
+      const script = `await (${slashPickerScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)}, ${JSON.stringify(outcome)});`;
+      await execute(
+        process.execPath,
+        ['--experimental-strip-types', '--input-type=module', '-e', script],
+        { timeout: 5_000 },
+      );
+    });
+  }
+});
+
+test('terminal slash restore presents completed results without another question or restore', async (t) => {
+  for (const outcome of ['result', 'refresh-error'] as const) {
+    await t.test(outcome, async () => {
+      const script = `await (${slashPickerScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)}, ${JSON.stringify(outcome)});`;
+      await execute(
+        process.execPath,
+        ['--experimental-strip-types', '--input-type=module', '-e', script],
+        { timeout: 5_000 },
+      );
+    });
+  }
+});
+
+test('TUI worktree recovery is automatic and uses scoped archive-bound RPC', async (t) => {
   const script = `
     import { strict as assert } from 'node:assert';
     import plugin from ${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)};
@@ -468,8 +773,6 @@ test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit 
     };
     const reference = { id: bundle.id, fingerprint: fingerprint(bundle) };
     const state = new Map();
-    const prompts = [];
-    const confirmations = [];
     const prepared = [];
     const events = [];
     const toasts = [];
@@ -491,7 +794,7 @@ test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit 
           worktreePrepare: async ({ archive, request }, scope) => {
             assertScope(scope); assert.deepEqual(archive, reference);
             assert.deepEqual(request, { ...target, repository: snapshot.repository, worktree: snapshot.worktree,
-              ref: scenario === 'saved' ? snapshot.commit : 'feature/session' });
+              ref: snapshot.commit });
             const { ref, ...source } = request;
             const plan = { ...source, commit: snapshot.commit };
             prepared.push(plan);
@@ -500,7 +803,6 @@ test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit 
           worktreeRecreate: async ({ archive, plan }, scope) => {
             assertScope(scope); assert.deepEqual(archive, reference);
             assert.deepEqual(plan, prepared[0]);
-            assert.equal(confirmations.length, 1);
             events.push('recreate');
             return null;
           },
@@ -512,68 +814,35 @@ test('TUI worktree recovery uses scoped archive-bound RPC and requires explicit 
         message: { list: async ({ sessionID }) => ({ data: state.get(sessionID).messages, cursor: {} }) },
       },
       keymap: { layer: factory => { commands = factory().commands; } },
-      data: { session: { invalidate: id => refreshed.push(id), sync: async () => {} } },
+      data: { on: () => () => {}, session: { invalidate: id => refreshed.push(id), sync: async () => {} } },
       ui: {
         router: { current: () => route, navigate: next => { route = next; } },
         tabs: { open: () => events.push('open') },
         toast: { show: toast => toasts.push(toast) },
         dialog: {
-          prompt: async question => {
-            prompts.push(question);
-            const index = prompts.length - 1;
-            if (scenario === 'cancel-source-' + index) return undefined;
-            return [snapshot.repository, 'feature/session', snapshot.worktree][index];
-          },
-          confirm: async question => {
-            confirmations.push(question);
-            assert.match(question.message, new RegExp('Commit: ' + snapshot.commit));
-            assert.match(question.message, /Repository: \\/synthetic\\/source/);
-            assert.match(question.message, /Worktree: \\/synthetic\\/worktree/);
-            assert.deepEqual(question.label, { confirm: 'Recreate and restore', cancel: 'Cancel' });
-            if (scenario === 'saved') assert.match(question.message, /uncommitted or untracked files.*not saved and cannot be restored/);
-            return scenario === 'cancel-confirm' ? false : scenario === 'close-confirm' ? undefined : true;
-          },
+          prompt: () => assert.fail('Recovery must not ask for input'),
+          confirm: () => assert.fail('Recovery must not ask for confirmation'),
         },
       },
     });
     await commands.find(command => command.id === 'simpod.session-archive.restore').run(bundle.id);
-    assert(!toasts.some(toast => toast.variant === 'error'), JSON.stringify(toasts));
-    if (scenario.startsWith('cancel-source-')) {
-      assert.equal(prompts.length, Number(scenario.at(-1)) + 1);
-      assert.deepEqual(prepared, []);
-      assert.deepEqual(confirmations, []);
-    } else {
-      assert.equal(prompts.length, scenario === 'saved' ? 0 : 3);
-      assert.equal(confirmations.length, 1);
-    }
-    if (prompts.length === 3) {
-      assert.deepEqual(prompts.map(question => question.title), [
-        'Existing repository on the server', 'Branch or commit', 'Worktree root to recreate',
-      ]);
-      assert.equal(prompts[2].value, location.directory);
-    }
-    if (scenario === 'legacy' || scenario === 'saved') {
+    if (scenario === 'saved') {
       assert.deepEqual(events, ['recreate', 'import', 'open']);
       assert.deepEqual(refreshed, ['ses_archived']);
       assert.equal(route.sessionID, 'ses_archived');
       assert.equal(toasts.at(-1).variant, 'success');
+      assert.match(toasts.at(-1).message, /Uncommitted or untracked files were not recovered/);
     } else {
+      assert.deepEqual(prepared, []);
       assert.deepEqual(events, []);
       assert.deepEqual(refreshed, []);
       assert.equal(state.size, 0);
       assert.deepEqual(route, { type: 'home' });
-      assert.deepEqual(toasts, []);
+      assert.equal(toasts.at(-1).variant, 'error');
+      assert.match(toasts.at(-1).message, /archive.*(metadata|recorded|repository)/i);
     }
   `;
-  for (const scenario of [
-    'legacy',
-    'saved',
-    'cancel-source-0',
-    'cancel-source-1',
-    'cancel-source-2',
-    'cancel-confirm',
-    'close-confirm',
-  ]) {
+  for (const scenario of ['saved', 'legacy']) {
     await t.test(scenario, async () => {
       await execute(
         process.execPath,
