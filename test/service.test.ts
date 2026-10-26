@@ -246,6 +246,8 @@ function assertNoDelete({ sessions }: Fixture) {
 test('archives the complete family before deletion and restores IDs parent first at original or mapped destinations', async (t) => {
   for (const mode of [
     'single project',
+    'completed compaction',
+    'legacy completed compaction',
     'cross-project descendants',
     'mapped descendant',
     'mapped root and descendant',
@@ -257,7 +259,27 @@ test('archives the complete family before deletion and restores IDs parent first
         transfer('ses_child', 'ses_root'),
         transfer('ses_grandchild', 'ses_child'),
       ];
-      if (mode !== 'single project') {
+      if (mode.endsWith('compaction')) {
+        const root = original[0];
+        assert(root);
+        const compaction = {
+          id: 'msg_compaction',
+          type: 'compaction' as const,
+          time: { created: 1700000000001 },
+          status: 'completed' as const,
+          reason: 'auto' as const,
+          summary: 'Preserved compacted context: č 🌱',
+          ...(mode === 'legacy completed compaction'
+            ? { recent: 'Preserved legacy recent context' }
+            : {
+                native: {
+                  messages: [{ role: 'assistant', content: 'Replay context' }],
+                },
+              }),
+        };
+        root.messages.splice(1, 0, compaction);
+        f.sessions.state.set(root.info.id, structuredClone(root));
+      } else if (mode !== 'single project') {
         const child = original[1];
         const grandchild = original[2];
         assert(child && grandchild);
@@ -464,7 +486,6 @@ const unsettled: Array<{ name: string; message: SessionMessageInfo }> = [
       status: 'running',
       reason: 'manual',
       summary: '',
-      recent: '',
     },
   },
 ];
