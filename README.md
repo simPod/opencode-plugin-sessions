@@ -1,14 +1,14 @@
 # OpenCode Sessions Plugin
 
-An OpenCode V2 plugin that saves session transcripts to private JSON files, then
-deletes the live sessions. Restoring an archive imports the original session IDs
-and messages. It can also permanently delete a session tree without an archive.
+An OpenCode V2 plugin that archives and restores session trees through the native
+session API. Sessions stay in OpenCode's database; new archives do not export,
+import, delete sessions, or create JSON files. Existing file archives remain
+restorable. The plugin can also permanently delete a session tree.
 
-**Archive deletion is not atomic.** OpenCode V2 has no public session lock or
-compare-and-delete operation. Before running an archive, stop other clients and
-automations from changing that session or its children. A write in the final
-check-to-delete gap can be lost. Do not use this plugin when you need a lossless
-backup of an actively shared session.
+**Native archives are not backups.** Permanent native deletion can remove them.
+Tree archive and restore update each session separately, not atomically. A failure
+can leave a partly updated tree; the plugin reports partial progress and does not
+roll it back.
 
 ## Commands
 
@@ -18,21 +18,23 @@ to a model:
 
 - `/session-id`: show the exact current session ID in a result panel. No arguments
   are accepted; sessions and archive files are not changed.
-- `/session-archive [session-id]`: save and verify the current session, or the
-  supplied ID, and its descendants, then delete them without confirmation.
-- `/session-restore [session-id | archive-id]`: restore the archive that contains
-  the supplied session ID, including the whole saved family. Archive UUIDs remain
-  supported. Without an ID, browse the current project's archives and select one
-  to restore immediately.
+- `/session-archive [session-id]`: set the native archive flag on the current
+  session, or the supplied ID, and each descendant, without confirmation.
+- `/session-restore [session-id | archive-id]`: clear the native archive flag for
+  an archived family, or import an existing file archive. Root and descendant
+  session IDs and legacy archive UUIDs are supported. Without an ID, browse the
+  current project's native and file archives and select one to restore immediately.
 - `/session-delete [session-id]`: permanently delete the current session, or the
   supplied ID, and its descendants immediately, without confirmation. No archive
   is saved. Active work is stopped. Existing archive files are not changed.
 
-Session-ID lookup searches only archives available to the current project,
-including explicitly mapped source archives. Root and descendant IDs are
-accepted. One match restores immediately; multiple matches open a picker limited
-to those archives. No match makes no changes. Selecting a descendant restores
-the archive's root and all saved descendants, not only that session.
+Native archives are grouped under their highest archived ancestor. Session-ID
+lookup restores that family, not only the supplied descendant. The root must
+belong to the current project; the shared non-Git `global` project also requires
+the exact current directory. File lookup retains explicitly mapped sources and
+saved descendant IDs. One match restores immediately; multiple matches open a
+matching-only picker. No match makes no changes. The combined picker sorts by
+archive date, newest first, not by the last conversation activity.
 
 `/session-restore` replaces `/session-unarchive` and `/session-archives`. The
 old command names are not aliases. Existing archive files and IDs are unchanged.
@@ -57,20 +59,21 @@ also see or answer it. Use one client for restore. If the plugin reloads during
 selection, the pending form remains available in the native question UI.
 
 Submitting `/session-delete` or running its TUI palette action starts deletion
-without an approval step or a later cancellation step. Unlike archive, delete
-does not need a settled or restorable transcript: it uses native deletion,
-including for active, forked, or reverted sessions. The tree's IDs,
-parent links, projects, locations, and titles are checked again before deletion;
+without an approval step or a later cancellation step. Delete does not need a
+settled or restorable transcript: it uses native deletion,
+including for active, forked, or reverted sessions. The tree's IDs, parent links,
+projects, locations, and titles are checked again before deletion;
 changes stop deletion. This check is not atomic with native recursive deletion.
 A new descendant created in that gap can also be deleted.
 Stop other clients and automations if you need the captured set to stay fixed.
 There is no backup or automatic recovery. Descendants from other projects are
-also deleted. Use `/session-archive` to keep a restorable transcript.
+also deleted. Native archives do not protect sessions from permanent deletion;
+use an independent backup when one is required.
 
 The TUI command palette retains **Archive session tree**, **Restore session
 archive**, and **Delete session tree permanently** under **Session archives**.
 Restore uses the same searchable TUI picker and opens the restored session.
-Archive and delete act on the open session and leave the removed chat.
+Archive and delete act on the open session and leave the affected chat.
 
 Slash commands require the server's existing managed-service registration. The
 plugin authenticates with that registration and verifies that it connects to its
@@ -78,17 +81,18 @@ own hosting plugin instance before reading or changing sessions. It never starts
 a second server. Standalone or embedded hosts without a matching registration
 are refused; the TUI palette actions do not have this restriction.
 
-The TUI palette actions use the server plugin's storage RPCs and their existing
+The TUI palette actions use the server plugin's RPCs and their existing
 authenticated client for session operations, so they never discover a different
-local server. This also supports a remote OpenCode server: archive files are
-stored on that server. Slash commands also work when connected to a remote
-managed server; its service registration is read on that server, not the client
-machine. The plugin does not add custom desktop buttons.
+local server. This also supports a remote OpenCode server: native archives stay
+in its database, and legacy archive files are read on that server. Slash commands
+also work when connected to a remote managed server; its service registration is
+read on that server, not the client machine. The plugin does not add custom
+desktop buttons.
 
 ## Install
 
-Requires OpenCode V2.0.27, Git, Node 26.4 or newer, and pnpm 10.33.3. Build the
-local checkout:
+Requires OpenCode V2.1.4 or newer, Git, Node 26.4 or newer, and pnpm 10.33.3.
+Build the local checkout:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -119,7 +123,7 @@ implementation worktree:
 }
 ```
 
-Use the built `dist` directory for a local installation: V2.0.27's local
+Use the built `dist` directory for a local installation: OpenCode's local
 directory loader looks for `index.js`, `tui.js`, and `rpc.js` there rather than
 using the root package's exports.
 
@@ -131,17 +135,33 @@ published to npm; installation uses the built checkout.
 OpenCode supplies the plugin's Effect runtime. The pinned SDK packages must
 match that runtime; after an OpenCode upgrade that changes Effect APIs, update
 the SDK packages together, reinstall dependencies, and rebuild this checkout.
-The 2.0.27 packages use Effect 4.0.1. The older 2.0.24 packages require an
-incompatible Effect release candidate and fail to load in OpenCode 2.0.27.
 
-## Restore after a rename or removed worktree
+## Native restore and removed worktrees
 
-Restore automatically recreates missing Git worktrees before importing sessions,
-without asking for a repository, commit, path, or confirmation. Version-2
-archives record each linked worktree's repository, exact commit, root, branch
-label, and whether it contained uncommitted or untracked files. Recovery uses
-that exact recorded project and directory, not the branch's current tip. A
-session can point inside the recorded worktree root.
+Native restore only clears the archive flag. Session IDs, messages, parent links,
+fork/revert state, and environment state remain in the database; they are not
+recreated through import. Native archive does not capture worktree recovery
+metadata. Native restore does not recreate removed directories or worktrees,
+restore project files, or apply `restoreMappings`. Make the required directory
+and project files available separately; a missing location can cause the server
+to reject the native update. Archiving does not stop active work.
+
+Native state does not record archive batches. Families follow adjacent archived
+parent links; restore traverses the current subtree, including descendants
+archived in separate operations. Legacy files instead restore their exact saved
+trees.
+
+## Legacy file restore
+
+Existing version-1 and version-2 JSON archives remain readable. Only this legacy
+restore path imports sessions, uses `restoreMappings`, and can recreate missing
+Git worktrees. No new file archives are created.
+
+Version-2 files record linked-worktree repository, exact commit, root, branch
+label, and dirty state. Restore automatically recreates missing Git worktrees
+from that metadata, without repository, commit, path, or confirmation questions.
+Recovery uses the recorded project and directory, not the branch's current tip.
+A session can point inside the recorded worktree root.
 
 Version-1 archives remain readable when their locations exist. If any missing
 location lacks recorded recovery details, restoration stops before any worktree
@@ -186,7 +206,8 @@ prefix matches, automatic guesses, or mapping chains. Duplicate source pairs are
 rejected. A mapped destination must exist, be readable, and resolve to the
 specified destination project ID. Desktop and TUI read the same server rules.
 Configured mappings apply to subsequent `/session-restore` calls, with or
-without an archive ID; they do not affect archive export or deletion.
+without an archive ID; they do not affect native archive, native restore, or
+deletion.
 
 Restore keeps session IDs, parent links, messages, and the original archive
 unchanged. Only the imported project ID and directory change, plus the existing
@@ -200,10 +221,11 @@ saved permissions before resuming a relocated session; rules for the old paths
 may no longer apply to the new directory. Workspace identity restoration is
 still unsupported. Remove a mapping when it should no longer apply.
 
-## Storage
+## Legacy file storage
 
 `storageDirectory` accepts an absolute path or `~/...`. Without it, the plugin
-uses `~/.opencode-session-archives`. For remote connections, `~` is the server
+uses `~/.opencode-session-archives` to find existing file archives. Native archives
+do not use this directory. For remote connections, `~` is the server
 user's home, not the client's home. `XDG_DATA_HOME` does not change this
 default. Existing archives are not moved; set `storageDirectory` to their
 current directory if needed.
@@ -220,62 +242,51 @@ of one Git project share its folder. Non-Git locations use their directory as an
 additional key because OpenCode gives them the shared `global` project ID.
 Renaming a project's label reuses its existing ID-based folder.
 
-Directories must be private (`0700`) and files are created with `0600`. Existing
-unsafe permissions or symlinks are rejected, not silently changed. Files contain
-unsanitized transcripts and can contain secrets. They are not encrypted. Use
-private storage and an encrypted disk or filesystem if needed. Do not commit
-archive files to Git or expose their directory through HTTP.
+Legacy storage directories must be private (`0700`) and files private (`0600`).
+Existing unsafe permissions or symlinks are rejected, not silently changed.
+Files contain unsanitized transcripts and can contain secrets. They are not
+encrypted. Use private storage and an encrypted disk or filesystem if needed.
+Do not commit archive files to Git or expose their directory through HTTP.
 
 Each versioned JSON file contains the root and all descendants in parent-first
 order, their original project IDs and directories, optional Git recovery
 metadata, and a SHA-256 checksum. A family can span multiple projects, including
 non-Git locations. The whole archive stays in the root project's folder; it is
-not split between descendant projects. Writes are synced, published atomically
-without overwriting an existing archive, and read back before deletion. The
-checksum detects accidental damage, not malicious edits by someone who can write
-the directory.
+not split between descendant projects. The checksum detects accidental damage,
+not malicious edits by someone who can write the directory. Restore does not
+change or remove these files.
 
 ## Safety and limitations
 
-- Running sessions, queued inbox work, unfinished messages/tools, and
-  fork/revert state prevent archiving, including in descendants from other
-  projects.
-- All message pages and descendants are collected. The plugin compares raw
-  messages with the native export and rechecks the whole family immediately
-  before deletion. These checks reduce the concurrency risk; they do not remove
-  it.
-- Native deletion removes descendants recursively. Archive requires a verified
-  copy of every known descendant first; `/session-delete` makes no backup.
-- Restore refuses existing IDs and missing external parents. Parents are
-  imported before children at their original working directories. Before any
-  import, every saved directory must pass a fresh server filesystem check and
-  resolve to its original project ID, or an explicitly configured mapped project
-  ID. Confirm recreation of removed Git worktrees, restore the original project
-  identity, or set a restore mapping before restoring. This project lookup can
-  be cached, so the plugin also verifies each imported project ID, location, and
-  transcript and stops if the server changes them. It does not silently remap
-  project IDs.
-- The root project's archive contains private transcripts from every descendant
+- Native archive and restore traverse descendants, including other projects,
+  and update each session individually with `archived: true` or `archived: false`.
+  They do not use transcript-export restrictions or an export/delete/import
+  fallback. If the native API is unavailable, the operation fails without
+  switching to destructive file archiving.
+- Tree updates are not atomic and do not lock the family. On failure, inspect
+  the session list before retrying; completed updates are not rolled back.
+- Native deletion removes descendants recursively, including archived sessions.
+  `/session-delete` makes no backup and leaves existing file archives unchanged.
+- Legacy file restore refuses existing IDs and missing external parents. It
+  checks every directory and project before parent-first import and verifies
+  imported locations and transcripts. It does not silently remap projects.
+- A legacy root archive contains private transcripts from every descendant
   project. Project folders organize storage; they are not separate authorization
   boundaries. Use only a server and archive storage you trust for all these
-  projects. Existing single-project archives remain readable; older plugin
-  builds refuse new cross-project archives.
-- V2.0.24's public HTTP API strips workspace IDs and cannot restore them.
-  Visible workspace IDs are refused before archive writes or restore imports,
-  but this API cannot detect every workspace-linked live session. Do not rely on
-  this plugin to preserve workspace identity.
-- Archives remain after successful or partial restoration and after deletion
-  errors. There is no automatic rollback or deletion of restored sessions. After
-  a partial restore, inspect existing IDs before trying recovery; a normal retry
-  refuses those IDs.
-- Restored sessions are non-archived, but their update time is changed by
+  projects. Existing single-project archives remain readable.
+- Legacy file import cannot restore workspace identity and rejects visible
+  workspace IDs. Its older transcript format is not a full runtime backup.
+- File archives remain after successful or partial restoration. There is no
+  automatic rollback or deletion of imported sessions. After a partial file
+  restore, inspect existing IDs before recovery; a normal retry refuses those IDs.
+- Legacy imported sessions are non-archived, but their update time is changed by
   OpenCode. Export/import restores transcripts, not project files, snapshots,
   pending work, environment overrides, instruction entries, or original event
   history. Native import does not restore fork/revert state, so those sessions
   are refused rather than silently losing it.
 
-Native delete/import operations publish OpenCode's normal session events. The
-plugin does not fabricate native events or write SQLite.
+Native update/delete/import operations publish OpenCode's normal session events.
+The plugin does not fabricate native events or write SQLite.
 
 ## Development
 
@@ -286,6 +297,6 @@ pnpm build
 ```
 
 CI runs these commands. Tests use temporary files and a simulated API; they do
-not delete or import real OpenCode sessions. See the
+not archive, delete, or import real OpenCode sessions. See the
 [requirements](docs/session-archive.md) and
-[architecture decision](docs/adr/0001-file-backed-transcript-archives.md).
+[architecture decision](docs/adr/0011-native-session-archives.md).

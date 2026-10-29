@@ -1,6 +1,7 @@
 import type { CommandDefinition } from '@opencode/plugin/promise/command';
 import type { DesktopHost } from './desktop-client.ts';
 import { SessionDelete } from './delete.ts';
+import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
 import { fingerprint } from './fingerprint.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -77,6 +78,7 @@ export function desktopCommands(
     sessionID: string,
     argument: string,
   ): Promise<void> {
+    const native = new NativeSessionArchive(host.sessions);
     const targetSessionID = SessionID.safeParse(argument).success
       ? argument
       : undefined;
@@ -84,7 +86,12 @@ export function desktopCommands(
     if (id && !ArchiveID.safeParse(id).success)
       throw new Error('Use /session-restore [sessionID | archiveUUID].');
     if (!id) {
-      const archives = await storage.list(targetSessionID);
+      const archives = await restoreArchives(
+        native,
+        storage,
+        scope,
+        targetSessionID,
+      );
       if (!archives.length) {
         await host.report(
           sessionID,
@@ -129,6 +136,17 @@ export function desktopCommands(
         id = answer.archive;
       }
     }
+    if (SessionID.safeParse(id).success) {
+      signal.throwIfAborted();
+      const result = await native.restore(id, scope, targetSessionID);
+      await reportRestore(
+        host,
+        sessionID,
+        result,
+        `${result.sessionIDs.length} session(s). Restored from the native archive.`,
+      );
+      return;
+    }
     const bundle = await storage.read(id);
     if (!canRestore(bundle, scope, restoreMappings))
       throw new Error(
@@ -147,8 +165,17 @@ export function desktopCommands(
       storage,
       worktrees,
     ).restore(id, fingerprint(bundle), restoreMappings);
+    const message = `${result.sessionIDs.length} session(s). Archive retained: ${id}${restoreRecoveryMessage(result.recovery)}`;
+    await reportRestore(host, sessionID, result, message);
+  }
+
+  async function reportRestore(
+    host: DesktopHost,
+    sessionID: string,
+    result: { rootSessionID: string; sessionIDs: string[] },
+    message: string,
+  ): Promise<void> {
     try {
-      const message = `${result.sessionIDs.length} session(s). Archive retained: ${id}${restoreRecoveryMessage(result.recovery)}`;
       await host.report(
         sessionID,
         'Session tree restored',
@@ -163,7 +190,7 @@ export function desktopCommands(
       );
     } catch {
       throw new Error(
-        `The tree was restored, but the desktop result could not be shown. Open ${result.rootSessionID}; do not restore it again. Archive retained: ${id}`,
+        `The tree was restored, but the desktop result could not be shown. Open ${result.rootSessionID}; do not restore it again.`,
       );
     }
   }
@@ -179,31 +206,33 @@ export function desktopCommands(
     ),
     command(
       'session-archive',
-      'Save and verify a session tree, then remove it from OpenCode',
+      'Archive a session tree natively without deleting its data',
       async (host, sessionID, argument) => {
         const target = argument || sessionID;
         if (!SessionID.safeParse(target).success)
           throw new Error('Use /session-archive [sessionID].');
-        const service = new SessionArchive(host.sessions, storage, worktrees);
+        const service = new NativeSessionArchive(host.sessions);
         const preview = await service.preview(target);
-        if (preview.projectID !== projectID)
+        if (
+          preview.projectID !== projectID ||
+          (projectID === 'global' && preview.directory !== scope.directory)
+        )
           throw new Error(
-            'The session belongs to another project. Nothing was deleted.',
+            'The session belongs to another project. Nothing was changed.',
           );
         signal.throwIfAborted();
-        const saved = await service.archive(preview);
-        // Native deletion removes cached data, but cannot navigate the desktop.
-        // Never attach a result to a deleted session.
+        await service.archive(preview);
+        // Do not attach a result form to the newly archived tree.
         if (!preview.sessionIDs.includes(sessionID)) {
           try {
             await host.report(
               sessionID,
               'Session tree archived',
-              `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
+              `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${target}.`,
             );
           } catch {
             throw new Error(
-              `The tree was archived, but the desktop result could not be shown. Archive retained: ${saved.id}\nServer file: ${saved.path}`,
+              `The tree was archived, but the desktop result could not be shown. Restore with /session-restore ${target}.`,
             );
           }
         }
@@ -211,7 +240,7 @@ export function desktopCommands(
     ),
     command(
       'session-restore',
-      'Restore a session ID or archive UUID, or select an archive from this project',
+      'Restore a native session archive or legacy file archive from this project',
       restore,
     ),
     command(

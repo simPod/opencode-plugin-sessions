@@ -38,11 +38,17 @@ async function scenario(pluginURL: string) {
       },
       time: { created: 1, updated: 2 },
     },
-    messages: [],
+    messages: [
+      {
+        id: 'msg_test',
+        type: 'user',
+        time: { created: 1 },
+        text: 'Private transcript: č 🌱',
+      },
+    ],
   };
   const state = new Map([[original.info.id, structuredClone(original)]]);
   const bundles = new Map<string, ArchiveBundle>();
-  let savedID: string | undefined;
   let commands: Layer['commands'];
   const selections: Array<readonly { value: string }[]> = [];
   const lookups: Array<{ sessionID?: string }> = [];
@@ -58,6 +64,7 @@ async function scenario(pluginURL: string) {
   let beforeSessionGet: ((sessionID: string) => void) | undefined;
   const tabs: Array<{ sessionID: string }> = [];
   let imports = 0;
+  let removals = 0;
   function session(id: string) {
     const item = state.get(id);
     assert(item);
@@ -110,12 +117,7 @@ async function scenario(pluginURL: string) {
           beforeRead?.();
           return structuredClone(bundle(id));
         },
-        save: async (input: { bundle: ArchiveBundle }) => {
-          const item = structuredClone(input.bundle);
-          savedID = item.id;
-          bundles.set(item.id, item);
-          return { id: item.id, path: '/synthetic/archive.json' };
-        },
+        save: async () => assert.fail('Native archive must not save a bundle'),
         worktreeCapture: async () => [],
         worktreeMissing: async () => [],
       }),
@@ -124,17 +126,36 @@ async function scenario(pluginURL: string) {
           beforeSessionGet?.(sessionID);
           return structuredClone(session(sessionID).info);
         },
-        list: async ({ parentID }: { parentID?: string }) => ({
+        list: async ({
+          parentID,
+          archived,
+        }: {
+          parentID?: string;
+          archived?: boolean;
+        }) => ({
           data: [...state.values()]
-            .filter((item) => !parentID || item.info.parentID === parentID)
+            .filter(
+              (item) =>
+                (!parentID || item.info.parentID === parentID) &&
+                (archived === undefined ||
+                  (item.info.time.archived !== undefined) === archived),
+            )
             .map((item) => structuredClone(item.info)),
           cursor: {},
         }),
-        active: async () => ({}),
-        inbox: { list: async () => [] },
-        export: async ({ sessionID }: { sessionID: string }) =>
-          structuredClone(session(sessionID)),
+        update: async ({
+          sessionID,
+          archived,
+        }: {
+          sessionID: string;
+          archived: boolean;
+        }) => {
+          const info = session(sessionID).info;
+          if (archived) info.time.archived = 4;
+          else delete info.time.archived;
+        },
         remove: async ({ sessionID }: { sessionID: string }) => {
+          removals++;
           const pending = [sessionID];
           for (const parentID of pending) {
             for (const item of state.values())
@@ -215,21 +236,56 @@ async function scenario(pluginURL: string) {
   assert(archive.palette);
   assert(restore.palette);
   assert(remove.palette);
-  await archive.run();
-  assert.equal(state.size, 0);
-  assert(savedID);
-  assert.deepEqual(bundle(savedID).sessions, [original]);
+  const nativeChild = structuredClone(original);
+  nativeChild.info.id = 'ses_child';
+  nativeChild.info.parentID = 'ses_test';
+  assert(nativeChild.messages[0]);
+  nativeChild.messages[0].id = 'msg_child';
+  state.set('ses_child', nativeChild);
+  const unrelated = structuredClone(original);
+  unrelated.info.id = 'ses_other';
+  state.set('ses_other', unrelated);
+  tabs.push(
+    { sessionID: 'ses_test' },
+    { sessionID: 'ses_child' },
+    { sessionID: 'ses_other' },
+  );
+  route = { type: 'session', sessionID: 'ses_child' };
+  const beforeNativeArchive = structuredClone(state);
+  await archive.run('ses_test');
+  assert.equal(session('ses_test').info.time.archived, 4);
+  assert.equal(session('ses_child').info.time.archived, 4);
+  assert.deepEqual(session('ses_other'), unrelated);
   assert.equal(route.type, 'home');
-  const archived = bundle(savedID);
-  archived.projectID = 'old-project';
-  const root = archived.sessions[0];
-  assert(root);
+  assert.deepEqual(tabs, [{ sessionID: 'ses_other' }]);
+  await restore.run('ses_child');
+  assert.deepEqual(state, beforeNativeArchive);
+  assert.deepEqual(route, { type: 'session', sessionID: 'ses_test' });
+  assert.equal(imports, 0);
+  assert.equal(removals, 0);
+  assert.equal(bundles.size, 0);
+  lookups.length = 0;
+
+  // Legacy compatibility is independent of native archive creation.
+  const savedID = randomUUID();
+  const root = structuredClone(original);
   root.info.projectID = 'old-project';
   root.info.location.directory = '/synthetic/old-project';
   const child = structuredClone(root);
   child.info.id = 'ses_child';
   child.info.parentID = 'ses_test';
-  archived.sessions.push(child);
+  assert(child.messages[0]);
+  child.messages[0].id = 'msg_child';
+  const archived: ArchiveBundle = {
+    format: 'opencode-session-archive',
+    version: 1,
+    id: savedID,
+    createdAt: 3,
+    projectID: 'old-project',
+    rootSessionID: 'ses_test',
+    sessions: [root, child],
+  };
+  bundles.set(savedID, archived);
   const originalArchive = structuredClone(archived);
 
   for (const argument of [undefined, savedID, 'ses_test', 'ses_child']) {
@@ -279,7 +335,7 @@ async function scenario(pluginURL: string) {
             bundle(secondID).sessions = [structuredClone(root)];
           }
         : undefined;
-    const before = imports;
+    const before: number = imports;
     await restore.run('ses_child');
     assert.deepEqual(selections.at(-1)?.map((option) => option.value), [
       savedID,
@@ -479,6 +535,13 @@ async function pickerScenario(pluginURL: string) {
     createdAt: older.createdAt + 86_400_000,
     sessionCount: 3,
   };
+  const native = {
+    id: 'ses_native',
+    projectID: 'test-project',
+    title: 'Release native session',
+    location: { directory: '/synthetic/project' },
+    time: { created: 1, updated: 2, archived: newer.createdAt + 86_400_000 },
+  };
   const cleanup = await plugin.setup({
     location: { directory: '/synthetic/project' },
     client: {
@@ -489,6 +552,13 @@ async function pickerScenario(pluginURL: string) {
         read: () =>
           assert.fail('Cancelling the picker must not read an archive'),
       }),
+      session: {
+        list: async ({ archived }: { archived?: boolean }) => {
+          assert.equal(archived, true);
+          return { data: [native], cursor: {} };
+        },
+        update: () => assert.fail('Cancelling must not restore a native session'),
+      },
     },
     keymap: {
       layer: (factory: () => Layer) => {
@@ -520,8 +590,9 @@ async function pickerScenario(pluginURL: string) {
   const search = picker.search;
   const values = (query: string) =>
     search(query, selectedPicker.options).map((option) => option.value);
-  assert.deepEqual(values(''), [newer.id, older.id]);
+  assert.deepEqual(values(''), [native.id, newer.id, older.id]);
   assert.deepEqual(values('  API RELEASE  '), [newer.id]);
+  assert.deepEqual(values('SES_NATIVE'), [native.id]);
   assert.deepEqual(values('SES_OLDER'), [older.id]);
   assert.deepEqual(values(newer.id.slice(0, 8)), [newer.id]);
   assert.deepEqual(values('missing title'), []);
@@ -529,7 +600,7 @@ async function pickerScenario(pluginURL: string) {
   await cleanup();
 }
 
-test('TUI restore picker searches titles and IDs while keeping newest archives first', async () => {
+test('TUI restore picker combines native and legacy IDs in searchable newest-first order', async () => {
   const script = `await (${pickerScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   await execute(
     process.execPath,
@@ -555,7 +626,7 @@ async function slashPickerScenario(
     workspaceID: 'workspace',
   };
   const archive = {
-    id: 'dc7a0ecb-00e6-451e-90a5-8338d3862f90',
+    id: 'ses_restored',
     rootSessionID: 'ses_restored',
     title: 'Archived session',
     createdAt: 1_700_000_000_000,

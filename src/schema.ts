@@ -170,6 +170,10 @@ export const Summary = z.strictObject({
   sessionCount: z.number().int().positive(),
 });
 export type ArchiveSummary = z.infer<typeof Summary>;
+export const RestoreSummary = Summary.extend({
+  id: z.union([ArchiveID, SessionID]),
+});
+export type RestoreSummary = z.infer<typeof RestoreSummary>;
 
 export interface ArchiveStorage {
   save(bundle: ArchiveBundle): Promise<{ id: string; path: string }>;

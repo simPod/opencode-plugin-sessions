@@ -10,9 +10,9 @@ export interface SessionGateway {
   resolveProject(directory: string): Promise<string>;
   children(id: string): Promise<SessionInfo[]>;
   messages(id: string): Promise<SessionMessageInfo[]>;
-  busy(id: string): Promise<boolean>;
   existing(): Promise<Set<string>>;
-  export(id: string): Promise<SessionTransferData>;
+  archived(): Promise<SessionInfo[]>;
+  setArchived(id: string, archived: boolean): Promise<void>;
   remove(id: string): Promise<void>;
   import(data: SessionTransferData): Promise<SessionInfo>;
 }
@@ -22,7 +22,10 @@ export function gateway(
   signal?: AbortSignal,
 ): SessionGateway {
   const options = signal ? { signal } : undefined;
-  async function sessions(parentID?: string): Promise<SessionInfo[]> {
+  async function sessions(
+    parentID?: string,
+    archived?: boolean,
+  ): Promise<SessionInfo[]> {
     const found: SessionInfo[] = [];
     let cursor: string | undefined;
     const seen = new Set<string>();
@@ -31,6 +34,7 @@ export function gateway(
         {
           limit: 100,
           ...(parentID === undefined ? {} : { parentID }),
+          ...(archived === undefined ? {} : { archived }),
           ...(cursor === undefined ? {} : { cursor }),
         },
         options,
@@ -57,6 +61,9 @@ export function gateway(
     children: (id) => sessions(id),
     existing: async () =>
       new Set((await sessions()).map((session) => session.id)),
+    archived: () => sessions(undefined, true),
+    setArchived: (sessionID, archived) =>
+      client.session.update({ sessionID, archived }, options),
     messages: async (sessionID) => {
       const found: SessionMessageInfo[] = [];
       let cursor: string | undefined;
@@ -79,13 +86,6 @@ export function gateway(
       } while (cursor);
       return found;
     },
-    busy: async (sessionID) => {
-      const active = await client.session.active(options);
-      const inbox = await client.session.inbox.list({ sessionID }, options);
-      return active[sessionID] !== undefined || inbox.length !== 0;
-    },
-    export: (sessionID) =>
-      client.session.export({ sessionID, sanitize: false }, options),
     remove: (sessionID) => client.session.remove({ sessionID }, options),
     import: (data) =>
       client.session.import({ ...data, location: data.info.location }, options),

@@ -38,11 +38,21 @@ function transfer(id: string, projectID = 'project-a'): SessionTransferData {
       },
       time: { created: 1, updated: 2 },
     },
-    messages: [],
+    messages: [
+      {
+        id: `msg_${id}`,
+        type: 'user',
+        time: { created: 1 },
+        text: `Private transcript ${id}: č 🌱`,
+      },
+    ],
   };
 }
 
-function fixture(restoreMappings: RestoreMapping[] = []) {
+function fixture(
+  restoreMappings: RestoreMapping[] = [],
+  scope = { projectID: 'project-a', directory: '/synthetic/project' },
+) {
   const state = new Map<string, SessionTransferData>([
     ['ses_owner', transfer('ses_owner')],
     ['ses_target', transfer('ses_target')],
@@ -113,9 +123,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
       return structuredClone(bundle);
     },
     async save(bundle) {
-      events.push('save');
-      bundles.set(bundle.id, structuredClone(bundle));
-      return { id: bundle.id, path: `/synthetic/${bundle.id}.json` };
+      assert.fail(`Commands must not create archive files: ${bundle.id}`);
     },
   };
   const host: DesktopHost = {
@@ -138,16 +146,20 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
         assert(item);
         return structuredClone(item.messages);
       },
-      async busy() {
-        return false;
-      },
       async existing() {
         return new Set(state.keys());
       },
-      async export(id) {
+      async archived() {
+        return [...state.values()]
+          .filter((item) => item.info.time.archived !== undefined)
+          .map((item) => structuredClone(item.info));
+      },
+      async setArchived(id, archived) {
         const item = state.get(id);
         assert(item);
-        return structuredClone(item);
+        events.push(`${archived ? 'archive' : 'restore'}:${id}`);
+        if (archived) item.info.time.archived = 4;
+        else delete item.info.time.archived;
       },
       async remove(id) {
         events.push('remove');
@@ -184,7 +196,7 @@ function fixture(restoreMappings: RestoreMapping[] = []) {
   const commands = desktopCommands(
     async () => host,
     storage,
-    { projectID: 'project-a', directory: '/synthetic/project' },
+    scope,
     abort.signal,
     restoreMappings,
     worktrees,
@@ -274,23 +286,91 @@ test('session-id refuses a target argument instead of reporting another session'
   assert.deepEqual(f.reports, []);
 });
 
-test('desktop archive verifies storage and deletes immediately without a confirmation form', async () => {
+test('desktop native archive and restore preserve the tree without exporting or deleting it', async () => {
   const f = fixture();
+  const child = transfer('ses_child', 'project-b');
+  child.info.parentID = 'ses_target';
+  f.state.set('ses_child', child);
+  const original = structuredClone(f.state);
+  f.sessions.remove = async () => assert.fail('Native archive must not delete');
+  f.sessions.import = async () => assert.fail('Native restore must not import');
   await f.run('session-archive', 'ses_target');
-  assert.deepEqual(f.events, ['save', 'remove']);
-  assert(!f.state.has('ses_target'));
-  assert(f.state.has('ses_owner'));
+  assert.equal(f.state.get('ses_target')?.info.time.archived, 4);
+  assert.equal(f.state.get('ses_child')?.info.time.archived, 4);
+  assert.deepEqual(f.state.get('ses_owner'), original.get('ses_owner'));
+  await f.run('session-restore', 'ses_child');
+  assert.deepEqual(f.state, original);
+  assert.deepEqual(f.events, [
+    'archive:ses_child',
+    'archive:ses_target',
+    'restore:ses_target',
+    'restore:ses_child',
+  ]);
+  assert.equal(f.bundles.size, 0);
   assert.deepEqual(f.questions, []);
-  assert.match(f.reports[0] ?? '', /Archive:/);
+  assert.match(f.reports[0] ?? '', /archived natively/);
+  assert.match(f.reports[1] ?? '', /Open ses_target/);
 });
 
-test('desktop can archive the open session without trying to report to the deleted tree', async () => {
+test('desktop archives the open session without adding a result form to its archived tree', async () => {
   const f = fixture();
   await f.run('session-archive');
-  assert(!f.state.has('ses_owner'));
-  assert.deepEqual(f.events, ['save', 'remove']);
+  assert.equal(f.state.get('ses_owner')?.info.time.archived, 4);
+  assert.deepEqual(f.events, ['archive:ses_owner']);
   assert.deepEqual(f.reports, []);
   assert.deepEqual(f.questions, []);
+});
+
+test('desktop native archive rejects roots outside its project or global directory before any update', async (t) => {
+  for (const projectID of ['project-a', 'global'])
+    await t.test(projectID, async () => {
+      const f = fixture([], { projectID, directory: '/synthetic/project' });
+      f.state.set('ses_owner', transfer('ses_owner', projectID));
+      const foreign = transfer(
+        'ses_foreign',
+        projectID === 'global' ? 'global' : 'project-b',
+      );
+      foreign.info.location.directory = '/synthetic/other';
+      f.state.set('ses_foreign', foreign);
+      const original = structuredClone(f.state);
+      await assert.rejects(
+        f.run('session-archive', 'ses_foreign'),
+        /another (project|directory)/,
+      );
+      assert.deepEqual(f.state, original);
+      assert.deepEqual(f.events, []);
+    });
+});
+
+test('desktop descendant lookup offers both native and legacy archives but excludes foreign native roots', async () => {
+  const f = fixture();
+  f.archived('project-a', archiveID, true);
+  const file = f.bundles.get(archiveID);
+  assert(file);
+  file.createdAt = 6;
+  const native = transfer('ses_native');
+  native.info.time.archived = 4;
+  const child = transfer('ses_child', 'project-b');
+  child.info.parentID = 'ses_native';
+  child.info.time.archived = 4;
+  const foreign = transfer('ses_foreign', 'project-b');
+  foreign.info.time.archived = 5;
+  f.state.set(native.info.id, native);
+  f.state.set(child.info.id, child);
+  f.state.set(foreign.info.id, foreign);
+  await f.run('session-restore');
+  const field = f.questions[0]?.fields[0];
+  assert(field?.type === 'string');
+  assert.deepEqual(field.options?.map((option) => option.value), [
+    archiveID,
+    'ses_native',
+  ]);
+  f.answers.push({ archive: 'ses_native' });
+  await f.run('session-restore', 'ses_child');
+  assert.equal(f.questions.length, 2, 'Native and file matches need a picker');
+  assert.deepEqual(f.events, ['restore:ses_native', 'restore:ses_child']);
+  assert.equal(f.state.get('ses_foreign')?.info.time.archived, 5);
+  assert(f.bundles.has(archiveID));
 });
 
 test('desktop delete removes the whole tree immediately without an archive and reports only to a surviving session', async (t) => {
@@ -305,10 +385,8 @@ test('desktop delete removes the whole tree immediately without an archive and r
       const grandchild = transfer('ses_grandchild', 'global');
       grandchild.info.parentID = 'ses_child';
       f.state.set('ses_grandchild', grandchild);
-      f.sessions.export = async () => assert.fail('Delete must not export');
       f.sessions.messages = async () =>
         assert.fail('Delete must not read transcripts');
-      f.sessions.busy = async () => assert.fail('Native delete stops active work');
       await f.run('session-delete', target === 'ses_owner' ? '' : target);
       assert(!f.state.has(target));
       assert(!f.state.has('ses_child'));

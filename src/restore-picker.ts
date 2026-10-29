@@ -1,9 +1,9 @@
 import type { DialogSelectOptions } from '@opencode/plugin/tui/context';
 import { z } from 'zod';
-import { SessionID, Summary, type ArchiveSummary } from './schema.ts';
+import { SessionID, RestoreSummary } from './schema.ts';
 
 export const restorePickerMetadataKey = 'simpod.session-restore.archives';
-export const RestorePickerArchives = z.array(Summary).min(1);
+export const RestorePickerArchives = z.array(RestoreSummary).min(1);
 export const restoreResultMetadataKey = 'simpod.session-restore.result';
 export const RestorePickerResult = z.strictObject({
   rootSessionID: SessionID,
@@ -12,7 +12,7 @@ export const RestorePickerResult = z.strictObject({
 });
 
 export function restorePickerOptions(
-  archives: ArchiveSummary[],
+  archives: RestoreSummary[],
 ): DialogSelectOptions<string> {
   const text = new Map(
     archives.map((archive) => [

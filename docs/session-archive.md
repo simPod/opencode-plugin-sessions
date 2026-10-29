@@ -2,200 +2,185 @@
 
 ## Goal
 
-Remove completed conversations from the live OpenCode session list while keeping
-their transcripts available for later restoration, or permanently delete unwanted
-session trees without keeping a transcript.
+Hide conversations from the active OpenCode session list through native archive
+state while retaining them in the database. Keep existing file archives
+restorable and permanent session-tree deletion available.
 
-## Behavior
+## Commands and clients
 
 Provide four desktop and TUI slash commands: `/session-id`,
 `/session-archive [session-id]`, `/session-restore [session-id | archive-id]`, and
-`/session-delete [session-id]`.
-Without an ID, restore opens the current project's archive picker. Remove
-`/session-unarchive` and `/session-archives` without aliases. Archive means verified JSON export followed
-by recursive native deletion. Restore means native import with original IDs,
-parents first. These commands must not invoke a model.
+`/session-delete [session-id]`. Do not invoke a model. Keep the old
+`/session-unarchive` and `/session-archives` names removed, without aliases.
 
-Session ID shows the exact command invocation's session ID in a native result
-panel, including when the current session is a child. Accept no arguments. Do not
-read transcripts, change sessions, or read or change archive files.
+Session ID shows the exact invoking session ID, including a child ID, in a native
+result panel. Accept no arguments and do not change sessions or archive files.
 
-Delete means permanent native recursive deletion without archive creation or
-archive-file changes. Without an ID, delete uses the open session. The user
-explicitly approved deletion on submit without confirmation in both slash
-commands and the TUI palette action. Stop active work through native deletion.
-Do not apply archive's
-settled-transcript or import-compatibility restrictions to delete. Keep server
-root-project scope and hosting-instance checks, and use the TUI palette's
-connected client. Keep the shared operation guard; refuse queued commands.
+Archive, restore, and delete run immediately without confirmation and cannot be
+queued. Without an ID, archive and delete use the open session; restore opens a
+picker. Selecting a row restores it immediately; cancellation makes no changes.
 
-Recheck the captured tree's IDs, parents, projects, locations, and titles before
-deletion; refuse changes. Verify that all known IDs are absent after deletion.
-Failures must not claim a backup, successful deletion, or automatic rollback.
-Never attach server results to a deleted session. TUI palette deletion must leave
-a deleted current tree and close its tabs without closing unrelated tabs.
+The server owns slash-command callbacks in both clients. Register TUI actions
+only in the command palette, so each slash command appears once. Update archive
+and restore descriptions to distinguish native state from legacy file import;
+retain the permanent-delete warning.
 
-Each command must appear once in the TUI slash-command list, even when both the
-server and TUI plugins are loaded. The server owns slash-command callbacks in
-both clients. Keep TUI command registrations palette-only. Terminal restore
-recognizes the server's plugin-marked archive-selection forms and presents the
-same searchable picker used by its palette action, then replies to or cancels
-the original form through the connected client. The server performs restoration
-once; the terminal bridge must not invoke another restore operation.
+Desktop uses native question panels. Terminal restore recognizes plugin-marked
+selection forms, uses the same searchable picker as its palette action, and
+replies to or cancels the original form through the connected client. Only the
+server performs slash restoration. The terminal acknowledges its marked result,
+refreshes the family, opens the restored root if the invoking session is still
+visible, and shows a toast. Other slash results retain native panels. Palette
+archive and delete leave the affected chat; palette delete closes only affected
+tabs. Desktop restore does not automatically open a session.
 
-Keep archive rows compact: title, session count, and short archive date without
-long IDs. Search must match title words, root session IDs, and archive IDs,
-case-insensitively, while retaining newest-first order. Use native keyboard
-navigation and scrolling; a cancelled picker makes no changes.
+Slash commands require the host's managed-service registration and verify that
+the connection reaches the hosting plugin instance. Refuse standalone or
+embedded slash hosts without it. TUI palette actions use their existing connected
+client and server RPCs, including remote and standalone support. Never discover
+or start another server. Forms have no originating-client identity: another
+client viewing the same session can answer them. Use one client for restore;
+pending forms after reload remain available in the native question UI.
 
-Session-ID lookup matches any saved root or descendant in archives available to
-the current project, including explicitly mapped sources. Restore the whole
-saved family immediately when exactly one archive matches. For multiple matches,
-show only those archives in the picker; never choose one automatically. No
-match, cancellation, or a selection outside the matching set must not import
-sessions. Keep archive UUID input compatible. Before import, check that the
-selected archive still contains the supplied session ID. Do not widen project
-scope or change saved files, archive identity, or restoration safeguards for
-this lookup.
+## Native archive and restore
 
-Server commands must appear in both clients' slash-command lists. Desktop uses
-native question forms for archive selection and results. Terminal restore
-automatically acknowledges its marked result form, refreshes the restored
-family, opens the restored root if the user is still viewing the invoking
-session, and shows a toast. Other slash-command results retain native forms.
-Archive, restore, and delete run without confirmation in both desktop and TUI.
-Selecting an archive restores it immediately; cancelling the archive picker
-makes no changes. Commands cannot be queued. After archiving or deleting the
-open session, the user can open another session from the session list; desktop
-restore makes the original sessions available without automatic navigation. TUI
-palette archive leaves the archived chat, palette delete leaves the deleted
-chat, and palette restore opens the restored session.
+Require OpenCode 2.1.4 or newer. Use the public native session update API with
+`archived: true` for archive and `archived: false` for restore. Each update affects
+one session, so traverse the selected root and descendants explicitly, including
+descendants in other projects. Keep root-project command scope; for the shared
+non-Git `global` project, require the exact directory as well.
 
-Storage defaults to `~/.opencode-session-archives` on the connected server and
-remains configurable through `storageDirectory`. Project folders use a readable
-label plus a stable project key. Worktrees of the same Git project share
-storage; unrelated repositories and non-Git locations do not.
+New archives must not create JSON files, export transcripts, delete sessions, or
+import them. Do not fall back to destructive file archiving if the native API is
+unavailable. Native archive must not apply legacy settled-transcript,
+fork/revert, or import-compatibility restrictions. It does not stop active work.
+IDs, messages, parent links, fork/revert state, and environment state remain in
+OpenCode's database rather than being reconstructed from a transcript.
 
-A session family can contain descendants from other projects, including non-Git
-locations. Save the complete family in the root project's archive folder. Keep
-each session's project ID, parent ID, directory, and transcript; do not skip or
-split foreign-project descendants. The archive must match the root project, not
-every descendant's project. Root command and storage scope checks remain.
+Group native archived sessions by adjacent archived parent links. A supplied root
+or descendant ID selects its highest archived ancestor's family. Native state
+does not record archive batches: restore traverses the current subtree, including
+descendants archived in separate operations. This differs from a file archive's
+exact saved tree.
 
-Support optional server `restoreMappings` from an exact original project ID and
-absolute directory to an explicit destination project ID and absolute directory.
-The default is no mappings. Apply each match once; do not infer projects, match
-directory prefixes, or chain rules. Reject duplicate source pairs. Desktop and
-TUI use the same server configuration, without new commands or confirmations.
+Native archive does not record worktree snapshots or recovery metadata. Native
+restore does not apply file mappings, recreate removed directories or worktrees,
+or restore project files. Missing locations can cause native updates to fail in
+server middleware; explain that the required location must be made available
+separately.
 
-When an effective restore location is missing, automatically recreate its Git
-worktree from exactly matching recorded project/directory metadata, without
-repository, commit, path, or confirmation questions. New version-2 archives
-record linked-worktree repository, root, commit, branch label, and dirty state.
-Use the recorded commit, never the saved branch's current tip. Keep version-1
-archives readable when their locations exist. Missing metadata for any effective
-location, including a mapped destination, must stop restoration before all
-creation and import. Retain the archive and explain that the original directory
-must be recreated or explicitly mapped to an existing destination. Do not guess
-a repository or commit. Preflight every target before creation. Use detached
-worktrees without moving branches, replacing paths, fetching, running Git hooks
-or configured filters, or running startup commands. Match the source repository
-to the expected project and recheck all resulting session locations before
-import. Never create arbitrary missing non-Git directories. Report that only
-committed files are recreated and that dependencies and env files are not saved;
-warn about dirty files in the completed result when the recovered metadata marks
-them dirty. Keep created worktrees after partial failure for manual inspection.
-Recovery is executed on the server; TUI clients must not run local Git commands.
+Tree updates are not atomic. Report verified partial progress on failure without
+claiming rollback or full success. Leave completed updates in place and advise
+inspection before retrying. Native archives are not backups and remain subject
+to permanent native deletion.
 
-Mapped restore changes only imported project IDs and directories; retain session
-IDs, parent links, transcripts, and original archive bytes. Mapped root archives
-are visible in the destination picker only when their exact root pair explicitly
-maps to the current project and directory. Do not move archives or create
-missing source folders. Refuse duplicate eligible archive UUIDs rather than
-guessing. Do not rewrite permission rules, metadata, or paths embedded in
-transcripts.
+## Combined restore picker
 
-## Safety requirements
+List eligible native archived root families and existing file archives together,
+newest archive date first, not newest conversation activity first. Keep rows
+compact: title, session count, and short archive date. Search title words, root
+session IDs, and archive IDs case-insensitively without changing date order. Use
+native keyboard navigation and scrolling.
 
-Delete is irreversible and has no backup. Its tree recheck does not lock the
-session family: a descendant created in the final check-to-delete gap can be
-removed without appearing in the captured tree. There is no later cancellation
-or approval step. Disclose these limits and recommend
-archive when a transcript must be retained. Never delete real sessions during
-development or validation.
+Session-ID lookup searches eligible root and descendant IDs in both sources.
+One match restores immediately; multiple matches show only matching rows. No
+match, cancellation, or invalid selection makes no changes. Recheck the selected
+family's eligibility before restoration. Keep legacy archive UUID input
+compatible. Native scope uses the archived root's project, plus exact directory
+for `global`; file scope retains explicit mapped-source eligibility. Do not
+return transcript bodies in summary RPCs or widen project scope.
 
-The user explicitly approved removing archive and restore confirmations. Archive
-must refuse busy, queued, incomplete, forked, or reverted session families. Save the
-complete settled transcript of every descendant privately and verify it before
-deletion. Abort when the captured family changes.
+## Legacy file restore
 
-Restore must not overwrite existing IDs. Keep archives after success or failure.
-Do not automatically delete sessions after a partial restore. Before any import,
-check that every restore directory exists and is readable on the server, and
-that its location resolves to its saved project or explicit mapped destination.
-Directory checks must be fresh even when location metadata is cached; after each
-import, verify the project, complete returned location, parent ID, session ID,
-and transcript. Refuse changed or unavailable restore destinations rather than
-silently reassigning sessions. Reject duplicate message IDs across the whole
-family. Existing single-project archives remain readable.
+Keep version-1 and version-2 JSON archives readable, including cross-project
+families and non-Git descendants. Retain checksums, private storage checks,
+archive identity, and exact saved session trees. Storage still defaults to
+`~/.opencode-session-archives` on the server, configurable by `storageDirectory`.
+Stable project keys isolate repositories; Git worktrees share project storage
+and non-Git locations include their directory. Native archives do not use it.
 
-Reject visible workspace IDs before archive writes or restoration imports.
-V2.0.24's public HTTP API strips workspace IDs, so it cannot prove that a live
-tree has no workspace-linked sessions. Workspace identity restoration is outside
-these transcript archive guarantees; disclose this API limitation.
+Retain exact `restoreMappings` from original project ID and absolute directory to
+destination project ID and absolute directory. Default to none; do not infer
+projects, match prefixes, chain mappings, or accept duplicate source pairs. Only
+explicitly mapped root pairs make source files eligible in a destination picker.
+Do not move files, create missing mapped-source folders, rewrite transcript paths
+or permissions, or change archive bytes. Refuse duplicate eligible archive UUIDs.
 
-The user explicitly accepted guarded, non-atomic deletion for the first version.
-Communicate the remaining concurrent-write risk in documentation. Do not
-describe this workflow as lossless. The user must stop other clients and
-automations from writing to the session tree before invoking an archive.
+Legacy restore imports parents before children at validated locations. Refuse
+existing session IDs, missing external parents, duplicate message IDs, and
+visible workspace IDs. Before any import, check every effective directory exists,
+is readable, and resolves to its expected original or mapped project. Use fresh
+filesystem checks and verify imported IDs, parent links, projects, locations, and
+transcripts. Do not silently reassign projects.
+
+Retain automatic missing-worktree recovery from version-2 metadata: exact source
+repository, project/directory pair, worktree root, saved commit, branch label,
+and dirty state. Never use the branch's current tip. Preflight the whole family
+before creation or import. Missing recovery metadata, including for a mapped
+destination, stops recovery and import; version-1 files still restore at existing
+locations. Explain how to recreate the location or map to an existing destination.
+
+Create detached worktrees without moving branches, replacing paths, fetching,
+running hooks, configured filters, or startup commands. Never create arbitrary
+missing non-Git directories. Recovery runs on the server and requires its
+managed-service registration. Revalidate resulting locations before import.
+Report that only committed files are recreated, not dirty/untracked files,
+dependencies, or environment files; warn when saved metadata marks dirty files.
+
+Retain archive files and created worktrees after success or partial failure. Do
+not roll back by deleting imported sessions or created worktrees. A partial
+import needs inspection because a normal retry refuses existing IDs. Legacy
+transcript import does not restore full runtime state, workspace identity, or
+fork/revert state. These limits do not apply to native flag changes.
+
+## Permanent deletion and safety
+
+Delete remains native recursive deletion, without archive creation or file
+changes. It stops active work and accepts active, forked, or reverted trees.
+Retain root scope, hosting-instance checks, connected-client use, and the shared
+operation guard. Recheck captured IDs, parents, projects, locations, and titles
+before deletion; refuse changes. Verify known IDs are absent afterward. Never
+attach results to a deleted session.
+
+Deletion is irreversible, includes cross-project descendants, and has no backup
+or later cancellation step. The tree recheck is not atomic with recursive
+deletion: a new descendant in the final gap can also be removed. Recommend
+stopping other clients and automation when the captured set must stay fixed.
+Native archive is not protection from permanent deletion. Never claim automatic
+rollback or a backup after failure.
+
+Project folders and picker scope are not separate authorization boundaries. Use a
+server and legacy storage trusted for all projects in a family. File transcripts
+can contain secrets and are not encrypted; retain private permissions and never
+publish them through Git or HTTP.
 
 ## Non-goals
 
-No direct SQLite edits, synthetic native events, automatic scheduled archiving,
-custom web/desktop UI extensions, arbitrary-file imports, archive-file deletion,
-or full runtime/project backups. Do not change global OpenCode configuration
-during development or archive real user sessions as a validation step.
+No direct SQLite edits, synthetic events, automatic scheduled archiving, custom
+desktop buttons, arbitrary-file imports, archive-file deletion, new file archive
+creation, native worktree recovery, or full runtime/project backups. Do not
+change global configuration or mutate real user sessions during validation.
 
 ## Acceptance and rollout
 
-Tests must show private, verified, no-overwrite storage; project isolation;
-complete descendant handling; safe refusal; and parent-first restoration.
-Coverage must include cross-project archive/restore, non-Git descendants, root
-project isolation, and restoration refusal before any import when a descendant's
-original project location is unavailable or changed. Coverage must include
-mapped roots and descendants, exact source matching, destination preflight and
-post-import verification, unchanged archive files, source-scope isolation, and
-refusal of ambiguous archive IDs. Desktop and TUI coverage must show only the
-four command names, the exact current root or child ID without session or archive
-changes, archive, restore, and delete without confirmation, and
-restoration by supplied ID or picker selection. Coverage must include lookup by root and
-descendant session IDs, retained UUID input, a matching-only picker for repeated
-archives, and no import for missing IDs or cancelled or invalid matching
-selections. Delete coverage must include current and explicit targets,
-cross-project descendants, immediate deletion without confirmation, changed-tree
-refusal, scope and lifetime checks, failure reporting, retained archive files,
-and TUI navigation and tab cleanup. Server coverage must show filtered summary
-RPCs, without returning transcript bodies or expanding project scope. Desktop
-coverage must also show command registration, cancellable archive selection,
-native question form compatibility, and refusal of a connection to a different
-server. TUI coverage must show palette actions with no slash registrations and
-marked-form transport for terminal archive selection, cancellation, result
-acknowledgement and navigation without a second restore, and a warning when
-post-restore refresh fails. Search coverage must distinguish title-word
-matching, root-ID and archive-ID matching, newest-first ordering, and no
-matching results. Automatic recovery coverage must distinguish exact saved
-commits, shared-root deduplication, full preflight refusal, missing metadata,
-and existing-location restoration without recovery. Slash commands require a
-managed service registration on their host; standalone and embedded servers fail
-closed. TUI palette actions retain remote and standalone support. The
-repository is public; the package remains unpublished on npm. Install the built
-checkout only after the user chooses to enable it. See
-[ADR 0003](adr/0003-immediate-archive-and-restore.md) and
-[ADR 0005](adr/0005-cross-project-session-trees.md) and
-[ADR 0006](adr/0006-explicit-restore-relocations.md) and
-[ADR 0007](adr/0007-server-owned-slash-commands.md) and
-[ADR 0008](adr/0008-immediate-session-deletion.md) and
-[ADR 0009](adr/0009-confirmed-worktree-recreation.md). These terminal and
-automatic-recovery requirements are implemented by
-[ADR 0010](adr/0010-terminal-restore-and-automatic-recovery.md), which
-supersedes ADR 0009's interactive recovery decision.
+Tests must distinguish native flag updates from legacy imports. Cover current
+and explicit archive targets; complete cross-project descendants; root scope and
+exact `global` directory scope; native parent grouping; repeated archive state;
+partial failures without rollback; retained native state; and no export, import,
+deletion, or new file creation for native archive/restore. Cover unavailable API
+failure without destructive fallback.
+
+Cover mixed picker archive-date ordering, title/ID search, root and descendant
+lookup, legacy UUIDs, matching-only selection, cancellation, and invalid input.
+Retain legacy version-1/2, mapped scope, import validation, private storage,
+exact-commit recovery, missing-metadata refusal, and partial-import coverage.
+Retain delete checks, failure reporting, file preservation, tab cleanup, slash
+and palette registration, native forms, server identity checks, and terminal
+transport/navigation without a second restore.
+
+Tests use temporary files and simulated APIs, not real user session mutations.
+Keep the package unpublished on npm and install the built checkout. See
+[ADR 0011](adr/0011-native-session-archives.md) for the native archive decision,
+[ADR 0008](adr/0008-immediate-session-deletion.md) for deletion, and
+[ADR 0010](adr/0010-terminal-restore-and-automatic-recovery.md) for terminal
+presentation and legacy worktree recovery.

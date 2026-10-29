@@ -2,7 +2,6 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { OpenCode } from '@opencode/client';
 import type {
-  SessionInboxInfo,
   SessionInfo,
   SessionMessageInfo,
   SessionTransferData,
@@ -59,6 +58,7 @@ test('generated HTTP client reads all child and existing-ID pages without direct
     '/synthetic/another-worktree',
   );
   const foreign = { ...info('ses_foreign'), projectID: 'project-b' };
+  foreign.time.archived = 1700000000002;
   const all = [info('ses_root'), ...children, grandchild, foreign];
   const cursor = 'opaque cursor/+=';
   const f = httpGateway((request) => {
@@ -70,6 +70,7 @@ test('generated HTTP client reads all child and existing-ID pages without direct
     assert(!('directory' in parameters));
     assert(!('project' in parameters));
     assert(!('subpath' in parameters));
+    assert(!('archived' in parameters));
     const source =
       parameters.parentID === 'ses_root'
         ? children
@@ -104,6 +105,47 @@ test('generated HTTP client reads all child and existing-ID pages without direct
     { limit: '100' },
     { limit: '100', cursor },
   ]);
+});
+
+test('native archive HTTP contract uses flag updates and reads every archived page', async () => {
+  const archived = Array.from({ length: 101 }, (_, index) => ({
+    ...info(`ses_archived${index}`),
+    time: { created: 1, updated: 2, archived: 3 + index },
+  }));
+  const changes: unknown[] = [];
+  const f = httpGateway(async (request) => {
+    if (request.method === 'PATCH') {
+      assert.equal(new URL(request.url).pathname, '/api/session/ses_root');
+      changes.push(await request.json());
+      return new Response(null, { status: 204 });
+    }
+    assert.equal(request.method, 'GET');
+    assert.equal(new URL(request.url).pathname, '/api/session');
+    const parameters = query(request);
+    assert.deepEqual(parameters, {
+      limit: '100',
+      archived: 'true',
+      ...(parameters.cursor ? { cursor: 'next-archived' } : {}),
+    });
+    return Response.json(
+      parameters.cursor
+        ? { data: archived.slice(100), cursor: {} }
+        : { data: archived.slice(0, 100), cursor: { next: 'next-archived' } },
+    );
+  });
+  await f.sessions.setArchived('ses_root', true);
+  await f.sessions.setArchived('ses_root', false);
+  assert.deepEqual(changes, [{ archived: true }, { archived: false }]);
+  assert.deepEqual(await f.sessions.archived(), archived);
+});
+
+test('native archive transport errors are not treated as successful flag updates', async (t) => {
+  for (const status of [400, 401, 404, 500])
+    await t.test(String(status), async () => {
+      const f = httpGateway(() => new Response('', { status }));
+      await assert.rejects(f.sessions.setArchived('ses_root', true));
+      assert.equal(f.requests.length, 1);
+    });
 });
 
 test('generated HTTP client pages raw messages in ascending order without a message-type filter', async () => {
@@ -151,7 +193,7 @@ test('generated HTTP client pages raw messages in ascending order without a mess
   assert.equal(f.requests.length, 2);
 });
 
-test('native get, project resolution, unsanitized export, import location, and recursive remove use generated API envelopes', async () => {
+test('native get, project resolution, legacy import location, and recursive remove use generated API envelopes', async () => {
   const nativeInfo = info(
     'ses_root',
     'ses_parent',
@@ -199,11 +241,6 @@ test('native get, project resolution, unsanitized export, import location, and r
       assert.deepEqual(query(request), {});
       return Response.json({ data: nativeInfo });
     }
-    if (path === '/api/experimental/session/ses_root/export') {
-      assert.equal(request.method, 'GET');
-      assert.deepEqual(query(request), { sanitize: 'false' });
-      return Response.json({ data: transfer });
-    }
     if (path === '/api/experimental/session/import') {
       assert.equal(request.method, 'POST');
       assert.match(
@@ -224,14 +261,13 @@ test('native get, project resolution, unsanitized export, import location, and r
     await f.sessions.resolveProject(nativeInfo.location.directory),
     'project-a',
   );
-  assert.deepEqual(await f.sessions.export('ses_root'), transfer);
   assert.deepEqual(await f.sessions.import(transfer), nativeInfo);
   assert.deepEqual(imported, {
     ...transfer,
     location: { directory: '/synthetic/moved-worktree' },
   });
   assert.equal(await f.sessions.remove('ses_root'), undefined);
-  assert.equal(f.requests.length, 6);
+  assert.equal(f.requests.length, 5);
 });
 
 test('project preflight refuses unavailable directories despite matching cached project metadata', async (t) => {
@@ -254,56 +290,8 @@ test('project preflight refuses unavailable directories despite matching cached 
     });
 });
 
-test('native active and inbox responses independently prevent treating queued or running sessions as idle', async (t) => {
-  for (const state of [
-    'running',
-    'queued',
-    'idle',
-    'different session running',
-  ] as const)
-    await t.test(state, async () => {
-      const inbox: SessionInboxInfo[] =
-        state === 'queued'
-          ? [
-              {
-                id: 'inbox_fixture',
-                sessionID: 'ses_child',
-                type: 'compaction',
-                payload: {},
-                delivery: 'queue',
-                time: { created: 1700000000000 },
-              },
-            ]
-          : [];
-      const f = httpGateway((request) => {
-        assert.equal(request.method, 'GET');
-        assert.deepEqual(query(request), {});
-        if (new URL(request.url).pathname === '/api/session/active') {
-          return Response.json({
-            data:
-              state === 'running'
-                ? { ses_child: { type: 'running' } }
-                : state === 'different session running'
-                  ? { ses_other: { type: 'running' } }
-                  : {},
-          });
-        }
-        assert.equal(
-          new URL(request.url).pathname,
-          '/api/session/ses_child/inbox',
-        );
-        return Response.json({ data: inbox });
-      });
-      assert.equal(
-        await f.sessions.busy('ses_child'),
-        state === 'running' || state === 'queued',
-      );
-      assert.equal(f.requests.length, 2);
-    });
-});
-
 test('repeated server cursors abort enumeration instead of looping or trusting an incomplete family', async (t) => {
-  for (const resource of ['children', 'existing', 'messages'] as const)
+  for (const resource of ['children', 'existing', 'archived', 'messages'] as const)
     await t.test(resource, async () => {
       const f = httpGateway((request) => {
         assert.equal(
@@ -330,7 +318,9 @@ test('repeated server cursors abort enumeration instead of looping or trusting a
           ? () => f.sessions.children('ses_root')
           : resource === 'existing'
             ? () => f.sessions.existing()
-            : () => f.sessions.messages('ses_root');
+            : resource === 'archived'
+              ? () => f.sessions.archived()
+              : () => f.sessions.messages('ses_root');
       await assert.rejects(
         run,
         resource === 'messages'

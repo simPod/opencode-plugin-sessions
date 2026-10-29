@@ -3,6 +3,7 @@ import { Plugin } from '@opencode/plugin/tui';
 import { SessionDelete } from './delete.ts';
 import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
+import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
 import { Archives } from './rpc.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -122,29 +123,34 @@ export default Plugin.define({
       }
       // Do not use the TUI's default project or its possibly stale session cache here.
       const session = await context.client.session.get({ sessionID });
-      const { service, projectID } = await scoped(session.location);
+      const projectID = (
+        await context.client.location.get({ location: session.location })
+      ).project.id;
+      const service = new NativeSessionArchive(
+        gateway(context.client, lifetime.signal),
+      );
       const preview = await service.preview(sessionID);
       if (preview.projectID !== projectID) {
         throw new Error(
-          'The session location does not match its project. Nothing was deleted.',
+          'The session location does not match its project. Nothing was changed.',
         );
       }
       const before = context.ui.router.current();
       const viewingTree =
         before.type === 'session' &&
         preview.sessionIDs.includes(before.sessionID);
-      const saved = await service.archive(preview);
-      leaveDeletedTree(preview.sessionIDs, viewingTree);
+      lifetime.signal.throwIfAborted();
+      await service.archive(preview);
+      leaveTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
         title: 'Session tree archived',
-        message: `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
+        message: `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${sessionID}.`,
         variant: 'success',
       });
     }
 
-    function leaveDeletedTree(sessionIDs: string[], viewingTree: boolean): void {
-      // Native session.deleted events remove cached sessions and may already close tabs.
-      // Navigate before our tab cleanup so it cannot focus another deleted tree member.
+    function leaveTree(sessionIDs: string[], viewingTree: boolean): void {
+      // Navigate before tab cleanup so it cannot focus another removed tree member.
       const current = context.ui.router.current();
       if (
         viewingTree ||
@@ -153,9 +159,9 @@ export default Plugin.define({
         context.ui.router.navigate({ type: 'home' });
       }
       if (context.ui.tabs.enabled()) {
-        const deleted = new Set(sessionIDs);
+        const removed = new Set(sessionIDs);
         for (const tab of context.ui.tabs.list()) {
-          if (deleted.has(tab.sessionID)) context.ui.tabs.close(tab.sessionID);
+          if (removed.has(tab.sessionID)) context.ui.tabs.close(tab.sessionID);
         }
       }
     }
@@ -175,7 +181,7 @@ export default Plugin.define({
       const viewingTree =
         before.type === 'session' && preview.sessionIDs.includes(before.sessionID);
       await service.remove(preview);
-      leaveDeletedTree(preview.sessionIDs, viewingTree);
+      leaveTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
         title: 'Session tree deleted',
         message: `${preview.sessionIDs.length} session(s) permanently deleted. No archive was saved.`,
@@ -201,10 +207,19 @@ export default Plugin.define({
       ) {
         throw new Error('Provide a session ID or archive UUID to restore.');
       }
-      const { storage, restoreMappings } = await scoped(location);
+      const { storage, restoreMappings, projectID } = await scoped(location);
+      const native = new NativeSessionArchive(
+        gateway(context.client, lifetime.signal),
+      );
+      const scope = { projectID, directory: location.directory };
       let id = targetSessionID ? undefined : argument;
       if (!id) {
-        const archives = await storage.list(targetSessionID);
+        const archives = await restoreArchives(
+          native,
+          storage,
+          scope,
+          targetSessionID,
+        );
         if (archives.length === 0) {
           context.ui.toast.show({
             message: targetSessionID
@@ -227,23 +242,34 @@ export default Plugin.define({
         }
       }
 
-      const bundle = await storage.read(id);
-      if (
-        targetSessionID &&
-        !bundle.sessions.some((session) => session.info.id === targetSessionID)
-      )
-        throw new Error(
-          `The archive does not contain ${targetSessionID}. Nothing was restored.`,
+      let restored: {
+        rootSessionID: string;
+        sessionIDs: string[];
+        recovery?: { worktreeCount: number; dirty: boolean };
+      };
+      const isNative = SessionID.safeParse(id).success;
+      lifetime.signal.throwIfAborted();
+      if (isNative) {
+        restored = await native.restore(id, scope, targetSessionID);
+      } else {
+        const bundle = await storage.read(id);
+        if (
+          targetSessionID &&
+          !bundle.sessions.some((session) => session.info.id === targetSessionID)
+        )
+          throw new Error(
+            `The archive does not contain ${targetSessionID}. Nothing was restored.`,
+          );
+        const { service } = await scoped(location, {
+          id,
+          fingerprint: fingerprint(bundle),
+        });
+        restored = await service.restore(
+          id,
+          fingerprint(bundle),
+          restoreMappings,
         );
-      const { service } = await scoped(location, {
-        id,
-        fingerprint: fingerprint(bundle),
-      });
-      const restored = await service.restore(
-        id,
-        fingerprint(bundle),
-        restoreMappings,
-      );
+      }
       for (const sessionID of restored.sessionIDs)
         context.data.session.invalidate(sessionID);
       try {
@@ -264,7 +290,7 @@ export default Plugin.define({
       });
       context.ui.toast.show({
         title: 'Session tree restored',
-        message: `${restored.sessionIDs.length} session(s). The archive file is retained.${restoreRecoveryMessage(restored.recovery)}`,
+        message: `${restored.sessionIDs.length} session(s). ${isNative ? 'Restored from the native archive.' : 'The archive file is retained.'}${restoreRecoveryMessage(restored.recovery)}`,
         variant: 'success',
       });
     }
@@ -355,7 +381,7 @@ export default Plugin.define({
           id: 'simpod.session-archive.archive',
           title: 'Archive session tree',
           description:
-            'Archive the current session or a session ID, including descendants',
+            'Archive the current session or a session ID natively, including descendants',
           group: 'Session archives',
           palette: true,
           run: (input) => operate(() => archive(input)),
@@ -364,7 +390,7 @@ export default Plugin.define({
           id: 'simpod.session-archive.restore',
           title: 'Restore session archive',
           description:
-            'Restore a session ID or archive UUID, or select an archive in the current project',
+            'Restore a native session archive or legacy file archive in the current project',
           group: 'Session archives',
           palette: true,
           run: (input) => operate(() => restore(input)),
