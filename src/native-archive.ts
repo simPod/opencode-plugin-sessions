@@ -7,7 +7,7 @@ type NativeSessions = Pick<
   'get' | 'children' | 'archived' | 'setArchived'
 >;
 
-export interface NativeArchivePreview {
+interface NativeArchivePreview {
   rootSessionID: string;
   projectID: string;
   directory: string;
@@ -21,7 +21,7 @@ export class NativeSessionArchive {
     this.#sessions = sessions;
   }
 
-  async preview(rootSessionID: string): Promise<NativeArchivePreview> {
+  async #preview(rootSessionID: string): Promise<NativeArchivePreview> {
     SessionID.parse(rootSessionID);
     const root = await this.#sessions.get(rootSessionID);
     const family = [root];
@@ -59,11 +59,6 @@ export class NativeSessionArchive {
     }
   }
 
-  async archive(preview: NativeArchivePreview): Promise<void> {
-    // Each update changes one session, so leave the root visible until last.
-    await this.#update(preview.sessionIDs.toReversed(), true);
-  }
-
   async list(
     scope: { projectID: string; directory: string },
     targetSessionID?: string,
@@ -99,7 +94,7 @@ export class NativeSessionArchive {
         targetSessionID &&
         !family.some((session) => session.id === targetSessionID) &&
         (byID.has(targetSessionID) ||
-          !(await this.preview(id)).sessionIDs.includes(targetSessionID))
+          !(await this.#preview(id)).sessionIDs.includes(targetSessionID))
       )
         continue;
       summaries.push({
@@ -123,7 +118,7 @@ export class NativeSessionArchive {
       throw new Error(
         'The archived session is not available in this project. Nothing was restored.',
       );
-    const preview = await this.preview(rootSessionID);
+    const preview = await this.#preview(rootSessionID);
     await this.#update(preview.sessionIDs, false);
     return { rootSessionID, sessionIDs: preview.sessionIDs };
   }

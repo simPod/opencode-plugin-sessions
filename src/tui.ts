@@ -22,6 +22,29 @@ export default Plugin.define({
   id: 'simpod-sessions-tui',
   setup(context) {
     const rpc = context.client.rpc(Archives);
+    const pendingArchives = new Set<string>();
+    const stopArchiveFeedback = rpc.events.on('archiveResult', (event) => {
+      const route = context.ui.router.current();
+      const viewing =
+        route.type === 'session' && route.sessionID === event.data.sessionID;
+      if (event.data.variant === 'started') {
+        if (viewing) {
+          pendingArchives.add(event.data.operationID);
+          context.ui.toast.show({
+            title: 'Session archive',
+            message: event.data.message,
+            variant: 'info',
+          });
+        }
+        return;
+      }
+      if (!pendingArchives.delete(event.data.operationID) && !viewing) return;
+      context.ui.toast.show({
+        title: 'Session archive',
+        message: event.data.message,
+        variant: event.data.variant,
+      });
+    });
     const lifetime = new AbortController();
     // Include archive selection in the guard. Never queue destructive UI actions.
     let running = false;
@@ -123,12 +146,7 @@ export default Plugin.define({
       }
       // Do not use the TUI's default project or its possibly stale session cache here.
       const session = await context.client.session.get({ sessionID });
-      const projectID = (
-        await context.client.location.get({ location: session.location })
-      ).project.id;
-      const service = new NativeSessionArchive(
-        gateway(context.client, lifetime.signal),
-      );
+      const { service, projectID } = await scoped(session.location);
       const preview = await service.preview(sessionID);
       if (preview.projectID !== projectID) {
         throw new Error(
@@ -140,11 +158,11 @@ export default Plugin.define({
         before.type === 'session' &&
         preview.sessionIDs.includes(before.sessionID);
       lifetime.signal.throwIfAborted();
-      await service.archive(preview);
+      const saved = await service.archive(preview);
       leaveTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
         title: 'Session tree archived',
-        message: `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${sessionID}.`,
+        message: `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
         variant: 'success',
       });
     }
@@ -381,7 +399,7 @@ export default Plugin.define({
           id: 'simpod.session-archive.archive',
           title: 'Archive session tree',
           description:
-            'Archive the current session or a session ID natively, including descendants',
+            'Save and verify the current session or a session ID, including descendants, then remove it',
           group: 'Session archives',
           palette: true,
           run: (input) => operate(() => archive(input)),
@@ -407,6 +425,7 @@ export default Plugin.define({
       ],
     }));
     return () => {
+      stopArchiveFeedback();
       stopRestorePicker();
       lifetime.abort();
     };

@@ -61,15 +61,36 @@ function transfer(id: string, parentID?: string): SessionTransferData {
 
 class MemoryStorage implements ArchiveStorage {
   readonly bundles = new Map<string, ArchiveBundle>();
+  readonly events: string[];
+  afterSave: (() => void) | undefined;
+  saveFailure = false;
+  readFailure = false;
+  corruptRead = false;
 
-  async save(): Promise<{ id: string; path: string }> {
-    assert.fail('Legacy restore must not create archives');
+  constructor(events: string[]) {
+    this.events = events;
+  }
+
+  async save(bundle: ArchiveBundle) {
+    this.events.push('save');
+    if (this.saveFailure) throw new Error('Disk full');
+    this.bundles.set(bundle.id, structuredClone(bundle));
+    this.afterSave?.();
+    return { id: bundle.id, path: `/memory/${bundle.id}.json` };
   }
 
   async read(id: string): Promise<ArchiveBundle> {
+    this.events.push('read');
+    if (this.readFailure) throw new Error('Disk read failed');
     const stored = this.bundles.get(id);
     assert(stored, `Missing archive ${id}`);
-    return structuredClone(stored);
+    const result = structuredClone(stored);
+    if (this.corruptRead) {
+      const root = result.sessions[0];
+      assert(root);
+      root.messages = [];
+    }
+    return result;
   }
 
   async list(): Promise<ArchiveSummary[]> {
@@ -79,9 +100,13 @@ class MemoryStorage implements ArchiveStorage {
 
 class StatefulSessions implements SessionGateway {
   readonly state = new Map<string, SessionTransferData>();
+  readonly running = new Set<string>();
+  readonly queued = new Set<string>();
+  readonly omittedExports = new Set<string>();
   readonly removes: string[] = [];
   readonly imports: SessionTransferData[] = [];
   readonly events: string[];
+  afterExport: ((id: string) => void) | undefined;
   readonly projects = new Map<string, string>([
     ['/synthetic/ses_root', 'project-a'],
     ['/synthetic/ses_child', 'project-a'],
@@ -89,6 +114,9 @@ class StatefulSessions implements SessionGateway {
     ['/synthetic/non-git', 'global'],
   ]);
   readonly unavailableDirectories = new Set<string>();
+  beforeRemove: (() => Promise<void>) | undefined;
+  deletion: 'recursive' | 'throw' | 'partial-throw' | 'incomplete' =
+    'recursive';
   importFailureID: string | undefined;
   importedInfo: ((info: SessionInfo) => SessionInfo) | undefined;
 
@@ -112,24 +140,53 @@ class StatefulSessions implements SessionGateway {
     assert(projectID, 'The original project location is unavailable');
     return projectID;
   }
-  async children(): Promise<SessionInfo[]> {
-    assert.fail('Legacy restore must use the saved family');
+  async children(id: string): Promise<SessionInfo[]> {
+    return [...this.state.values()]
+      .filter((item) => item.info.parentID === id)
+      .map((item) => structuredClone(item.info));
   }
   async messages(id: string): Promise<SessionMessageInfo[]> {
     return structuredClone(this.item(id).messages);
   }
+  async busy(id: string): Promise<boolean> {
+    return this.running.has(id) || this.queued.has(id);
+  }
+  async export(id: string): Promise<SessionTransferData> {
+    const item = structuredClone(this.item(id));
+    if (this.omittedExports.has(id)) item.messages.pop();
+    this.afterExport?.(id);
+    return item;
+  }
   async archived(): Promise<SessionInfo[]> {
-    assert.fail('Legacy restore must not enumerate native archives');
+    assert.fail('File-backed archives must not enumerate native archives');
   }
   async setArchived(): Promise<void> {
-    assert.fail('Legacy restore must not update native archives');
+    assert.fail('File-backed archives must not update native archives');
   }
   async existing(): Promise<Set<string>> {
     return new Set(this.state.keys());
   }
   async remove(id: string): Promise<void> {
     this.removes.push(id);
-    assert.fail('Legacy restore must not delete sessions');
+    this.events.push(`remove:${id}`);
+    await this.beforeRemove?.();
+    if (this.deletion === 'throw') throw new Error('Native delete failed');
+    if (this.deletion === 'partial-throw') {
+      this.state.delete(id);
+      throw new Error('Native recursive delete stopped');
+    }
+    if (this.deletion === 'incomplete') {
+      this.state.delete(id);
+      this.state.delete('ses_child');
+      return;
+    }
+    const pending = [id];
+    for (let index = 0; index < pending.length; index++) {
+      for (const item of this.state.values()) {
+        if (item.info.parentID === pending[index]) pending.push(item.info.id);
+      }
+    }
+    for (const member of pending) this.state.delete(member);
   }
 
   async import(data: SessionTransferData): Promise<SessionInfo> {
@@ -155,10 +212,13 @@ class StatefulSessions implements SessionGateway {
   }
 }
 
-function fixture(version: 1 | 2 = 1) {
+function fixture(
+  version: 1 | 2 = 1,
+  initial: 'archived' | 'live' = 'archived',
+) {
   const events: string[] = [];
   const sessions = new StatefulSessions(events);
-  const storage = new MemoryStorage();
+  const storage = new MemoryStorage(events);
   const bundle: ArchiveBundle = {
     format: 'opencode-session-archive',
     id: '7ea78c04-b799-43ed-92e9-aea32d5144b9',
@@ -172,9 +232,21 @@ function fixture(version: 1 | 2 = 1) {
     ],
     ...(version === 2 ? { version, worktrees: [] } : { version }),
   };
-  storage.bundles.set(bundle.id, bundle);
+  if (initial === 'archived') storage.bundles.set(bundle.id, bundle);
+  // Server enumeration must not supply the service's parent-first ordering.
+  else
+    for (const item of [...bundle.sessions].reverse())
+      sessions.state.set(item.info.id, structuredClone(item));
   const service = new SessionArchive(sessions, storage);
   return { sessions, storage, service, events, bundle };
+}
+
+type Fixture = ReturnType<typeof fixture>;
+
+function assertNoDelete({ sessions }: Fixture) {
+  assert.deepEqual(sessions.removes, []);
+  assert.deepEqual(sessions.imports, []);
+  assert.deepEqual(new Set(sessions.state.keys()), new Set(familyIDs));
 }
 
 function onlyBundle(storage: MemoryStorage): ArchiveBundle {
@@ -401,6 +473,228 @@ test('unfinished archived work prevents every restoration import', async (t) => 
     });
 });
 
+test('invalid parent links and repeated descendant IDs prevent archive writes and deletion', async (t) => {
+  for (const duplicate of [false, true])
+    await t.test(
+      duplicate ? 'duplicate descendant' : 'wrong parent',
+      async () => {
+        const f = fixture(2, 'live');
+        f.sessions.children = async () =>
+          duplicate
+            ? [
+                await f.sessions.get('ses_child'),
+                await f.sessions.get('ses_child'),
+              ]
+            : [await f.sessions.get('ses_grandchild')];
+        await assert.rejects(
+          f.service.preview('ses_root'),
+          /session hierarchy changed/,
+        );
+        assert.equal(f.storage.bundles.size, 0);
+        assertNoDelete(f);
+      },
+    );
+});
+
+test('active, queued, unfinished, unrestorable, and export-omitted descendant work prevents archive writes and deletion', async (t) => {
+  const cases: Array<{
+    name: string;
+    change: (f: Fixture) => void;
+    error: RegExp;
+  }> = [
+    {
+      name: 'running child',
+      change: (f) => {
+        f.sessions.running.add('ses_child');
+      },
+      error: /running or has queued work/,
+    },
+    {
+      name: 'queued grandchild',
+      change: (f) => {
+        f.sessions.queued.add('ses_grandchild');
+      },
+      error: /running or has queued work/,
+    },
+    {
+      name: 'starts during export',
+      change: (f) => {
+        f.sessions.afterExport = (id) => {
+          if (id === 'ses_child') f.sessions.running.add(id);
+        };
+      },
+      error: /started work during export/,
+    },
+    ...unsettled.map(({ name, message }) => ({
+      name,
+      change: (f: Fixture) => {
+        f.sessions
+          .item('ses_grandchild')
+          .messages.push(structuredClone(message));
+      },
+      error: /unfinished work/,
+    })),
+    {
+      name: 'workspace identity',
+      change: (f) => {
+        Object.assign(f.sessions.item('ses_child').info.location, {
+          workspaceID: 'wrk_fixture',
+        });
+      },
+      error: /cannot restore workspace identity/,
+    },
+    {
+      name: 'export omits raw idle message',
+      change: (f) => {
+        f.sessions.omittedExports.add('ses_child');
+      },
+      error: /export omitted messages/,
+    },
+    ...(['project', 'directory'] as const).map((field) => ({
+      name: `${field} changes during export`,
+      change: (f: Fixture) => {
+        f.sessions.afterExport = (id) => {
+          if (id !== 'ses_root') return;
+          const child = f.sessions.item('ses_child');
+          if (field === 'project') child.info.projectID = 'project-changed';
+          else child.info.location.directory = '/synthetic/moved';
+        };
+      },
+      error: /transcript changed/,
+    })),
+  ];
+  for (const row of cases)
+    await t.test(row.name, async () => {
+      const f = fixture(2, 'live');
+      f.sessions.item('ses_child').info.projectID = 'project-b';
+      f.sessions.item('ses_grandchild').info.projectID = 'global';
+      const preview = await f.service.preview('ses_root');
+      row.change(f);
+      await assert.rejects(f.service.archive(preview), row.error);
+      assert.equal(f.storage.bundles.size, 0);
+      assertNoDelete(f);
+    });
+});
+
+test('project, location, title, transcript, and descendant changes invalidate snapshots before or after backup save', async (t) => {
+  const changes: Array<{ name: string; change: (f: Fixture) => void }> = [
+    {
+      name: 'descendant project',
+      change: (f) => {
+        f.sessions.item('ses_child').info.projectID = 'project-b';
+      },
+    },
+    {
+      name: 'descendant location',
+      change: (f) => {
+        f.sessions.item('ses_child').info.location.directory =
+          '/synthetic/moved';
+      },
+    },
+    {
+      name: 'title',
+      change: (f) => {
+        f.sessions.item('ses_child').info.title = 'Changed title';
+      },
+    },
+    {
+      name: 'transcript',
+      change: (f) => {
+        f.sessions.item('ses_grandchild').messages.push({
+          id: 'msg_new',
+          type: 'system',
+          time: { created: 1700000000003 },
+          text: 'New raw message',
+        });
+      },
+    },
+    {
+      name: 'new child',
+      change: (f) => {
+        f.sessions.state.set(
+          'ses_newchild',
+          transfer('ses_newchild', 'ses_root'),
+        );
+      },
+    },
+  ];
+  for (const timing of ['after preview', 'after save'] as const) {
+    for (const row of changes)
+      await t.test(`${row.name} ${timing}`, async () => {
+        const f = fixture(2, 'live');
+        const preview = await f.service.preview('ses_root');
+        if (timing === 'after save') f.storage.afterSave = () => row.change(f);
+        else row.change(f);
+        await assert.rejects(
+          f.service.archive(preview),
+          /session family changed/,
+        );
+        assert.deepEqual(f.sessions.removes, []);
+        assert.deepEqual(f.sessions.imports, []);
+        assert.deepEqual(
+          new Set(f.sessions.state.keys()),
+          new Set(
+            row.name === 'new child'
+              ? [...familyIDs, 'ses_newchild']
+              : familyIDs,
+          ),
+        );
+        assert.equal(f.storage.bundles.size, timing === 'after save' ? 1 : 0);
+        if (timing === 'after save')
+          assert.deepEqual(onlyBundle(f.storage).sessions, f.bundle.sessions);
+      });
+  }
+});
+
+test('save failure, unreadable backup, and corrupt read-back prevent native deletion', async (t) => {
+  for (const fault of ['saveFailure', 'readFailure', 'corruptRead'] as const)
+    await t.test(fault, async () => {
+      const f = fixture(2, 'live');
+      const preview = await f.service.preview('ses_root');
+      f.storage[fault] = true;
+      await assert.rejects(
+        f.service.archive(preview),
+        fault === 'saveFailure'
+          ? /Disk full/
+          : fault === 'readFailure'
+            ? /Disk read failed/
+            : /could not be verified/,
+      );
+      assertNoDelete(f);
+      assert.equal(f.storage.bundles.size, fault === 'saveFailure' ? 0 : 1);
+    });
+});
+
+test('native recursive deletion failure and incomplete deletion retain backup without automatic rollback', async (t) => {
+  const cases = [
+    { mode: 'throw', remaining: familyIDs, error: /Deletion did not complete/ },
+    {
+      mode: 'partial-throw',
+      remaining: ['ses_child', 'ses_grandchild'],
+      error: /Deletion did not complete/,
+    },
+    {
+      mode: 'incomplete',
+      remaining: ['ses_grandchild'],
+      error: /Deletion could not be verified/,
+    },
+  ] as const;
+  for (const row of cases)
+    await t.test(row.mode, async () => {
+      const f = fixture(2, 'live');
+      const preview = await f.service.preview('ses_root');
+      f.sessions.deletion = row.mode;
+      await assert.rejects(f.service.archive(preview), row.error);
+      assert.deepEqual(
+        new Set(f.sessions.state.keys()),
+        new Set(row.remaining),
+      );
+      assert.deepEqual(f.sessions.removes, ['ses_root']);
+      assert.deepEqual(f.sessions.imports, []);
+      assert.deepEqual(onlyBundle(f.storage).sessions, f.bundle.sessions);
+    });
+});
+
 test('restore checks every ID conflict and missing external parent before importing anything', async (t) => {
   for (const blocker of ['descendant ID conflict', 'missing external parent'])
     await t.test(blocker, async () => {
@@ -590,8 +884,8 @@ test('partial native import failure keeps verified restored sessions and the arc
   );
 });
 
-function worktreeFixture() {
-  const f = fixture(2);
+function worktreeFixture(initial: 'archived' | 'live' = 'archived') {
+  const f = fixture(2, initial);
   assert(f.bundle.version === 2);
   const snapshot: WorktreeSnapshot = {
     projectID: 'project-a',
@@ -602,7 +896,10 @@ function worktreeFixture() {
     branch: 'feature',
     dirty: true,
   };
-  const grandchild = f.bundle.sessions[2];
+  const grandchild =
+    initial === 'live'
+      ? f.sessions.item('ses_grandchild')
+      : f.bundle.sessions[2];
   assert(grandchild);
   grandchild.info.location.directory = `${snapshot.directory}/nested`;
   f.sessions.projects.set(`${snapshot.directory}/nested`, snapshot.projectID);
@@ -612,7 +909,10 @@ function worktreeFixture() {
   ];
   const recreated: WorktreePlan[] = [];
   const worktrees: WorktreeGateway = {
-    capture: async () => assert.fail('Legacy restore must not capture worktrees'),
+    capture: async (locations) =>
+      locations
+        .filter((location) => location.directory.startsWith(snapshot.directory))
+        .map((location) => ({ ...snapshot, ...location })),
     missing: async (locations) =>
       locations.filter((location) =>
         [...f.sessions.unavailableDirectories].some(
@@ -642,6 +942,47 @@ function worktreeFixture() {
   };
 }
 
+test('archives complete cross-project transcripts and worktree metadata before recursive deletion', async () => {
+  const f = worktreeFixture('live');
+  f.sessions.item('ses_child').info.projectID = 'project-b';
+  f.sessions.item('ses_grandchild').info.projectID = 'global';
+  const original = familyIDs.map((id) => structuredClone(f.sessions.item(id)));
+  const preview = await f.service.preview('ses_root');
+  assert.equal(preview.rootSessionID, 'ses_root');
+  assert.equal(preview.projectID, 'project-a');
+  assert.equal(preview.directory, '/synthetic/ses_root');
+  assert.deepEqual(preview.sessionIDs, familyIDs);
+  f.sessions.beforeRemove = async () => {
+    const bundle = onlyBundle(f.storage);
+    assert.deepEqual(bundle.sessions, original);
+    assert.deepEqual(await f.storage.read(bundle.id), bundle);
+    assert.deepEqual(new Set(f.sessions.state.keys()), new Set(familyIDs));
+  };
+
+  const saved = await f.service.archive(preview);
+  assert.deepEqual(f.events.slice(0, 3), [
+    'save',
+    'read',
+    'remove:ses_root',
+  ]);
+  assert.deepEqual(f.sessions.removes, ['ses_root']);
+  assert.deepEqual(f.sessions.imports, []);
+  assert.equal(f.sessions.state.size, 0);
+  const archived = onlyBundle(f.storage);
+  assert.equal(archived.id, saved.id);
+  assert.equal(archived.rootSessionID, 'ses_root');
+  assert.equal(archived.projectID, 'project-a');
+  assert(archived.version === 2);
+  assert.deepEqual(archived.worktrees, [
+    { ...f.snapshot, projectID: 'project-b' },
+    {
+      ...f.snapshot,
+      projectID: 'global',
+      directory: `${f.snapshot.directory}/nested`,
+    },
+  ]);
+});
+
 test('automatically restores a shared missing worktree at its recorded commit before importing parent first', async () => {
   const f = worktreeFixture();
   const original = structuredClone(onlyBundle(f.storage));
@@ -661,12 +1002,17 @@ test('automatically restores a shared missing worktree at its recorded commit be
       commit: f.snapshot.commit,
     },
   ]);
-  assert.deepEqual(f.events, [
-    'recreate',
-    'import:ses_root',
-    'import:ses_child',
-    'import:ses_grandchild',
-  ]);
+  assert.deepEqual(
+    f.events.filter(
+      (event) => event === 'recreate' || event.startsWith('import:'),
+    ),
+    [
+      'recreate',
+      'import:ses_root',
+      'import:ses_child',
+      'import:ses_grandchild',
+    ],
+  );
   assert.deepEqual(onlyBundle(f.storage), original);
 });
 

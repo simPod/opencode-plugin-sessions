@@ -128,6 +128,7 @@ export default Plugin.define({
         lifetime.signal,
         options.restoreMappings,
         worktrees,
+        (result) => registration.events.emit('archiveResult', result),
       );
       commands = await context.command.transform((editor) => {
         for (const command of definitions) editor.add(command);

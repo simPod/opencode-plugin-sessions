@@ -17,9 +17,17 @@ const ArchiveReference = z.strictObject({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
+export const ArchiveResult = z.strictObject({
+  operationID: z.uuid(),
+  sessionID: SessionID,
+  variant: z.enum(['started', 'success', 'error']),
+  message: z.string(),
+});
+export type ArchiveResult = z.infer<typeof ArchiveResult>;
+
 export const Archives = Rpc.define({
   id: 'simpod-session-archive',
-  events: {},
+  events: { archiveResult: { schema: ArchiveResult } },
   methods: {
     worktreeCapture: {
       input: z.strictObject({ locations: z.array(RestoreLocation) }),

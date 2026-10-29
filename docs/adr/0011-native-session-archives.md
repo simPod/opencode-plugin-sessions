@@ -1,21 +1,23 @@
-# 0011: Native session archive state with legacy file restoration
+# 0011: Defer native archive creation and retain both restore sources
 
 ## Status
 
 Accepted. Implements the updated [session archive requirements](../session-archive.md).
-Supersedes [ADR 0001](0001-file-backed-transcript-archives.md)'s file-backed
-creation and export/delete/import lifecycle for new archives. Existing file
-restore, mappings, and recovery remain supported. Desktop/TUI command ownership
-and permanent deletion are unchanged.
+Retains [ADR 0001](0001-file-backed-transcript-archives.md)'s file-backed creation
+lifecycle while adding restore support for existing native archives. Does not
+authorize file migration. Desktop/TUI command ownership and permanent deletion
+are unchanged.
 
 ## Context
 
 OpenCode 2.1.4 exposes native session updates with an `archived` boolean and
-archived-session listing. The former file-backed approach copied transcripts,
-then permanently deleted live trees. It could lose concurrent writes and could
-not preserve all runtime state through import. Native archive state removes the
-need for that destructive sequence, but existing version-1/2 files must remain
-restorable.
+archived-session listing. Keeping sessions in the database would avoid the
+file-backed export/delete/import lifecycle and preserve more runtime state.
+However, OpenCode 2.2.0's native TUI picker still includes archived rows, so setting
+the flag does not meet the goal of removing conversations from that picker.
+[Upstream issue #58364](https://github.com/anomalyco/opencode/issues/58364) tracks
+the picker problem. Existing native archives must remain accessible, but no file
+migration should start while the native picker behavior remains unsuitable.
 
 The native endpoint changes only one session. It does not stop active work,
 record a historical tree snapshot, or capture project files and Git recovery
@@ -23,34 +25,59 @@ metadata. Archived timestamps and parent links cannot identify archive batches.
 
 ## Decision
 
-Require OpenCode 2.1.4 or newer. Traverse the selected session and descendants,
-including cross-project descendants, and update each individually with
-`archived: true` or `archived: false`. Keep root-project scope and exact-directory
-scope for `global`. Do not export, import, delete, or create JSON files for new
-archives. Do not fall back to destructive file archiving if the API is absent.
+Keep file-backed creation for slash and TUI palette archive actions: capture a
+settled tree, save and verify an exact private JSON archive, recheck, then use
+native recursive deletion. Retain the existing final check-to-delete race; do
+not add concurrency safeguards. Native creation is disabled until the native TUI
+picker excludes archived sessions. Do not replace the native picker or patch its
+filters. Do not migrate, rewrite, or remove existing archive files, and do not
+automatically change existing native archive state.
 
-Combine native archived root families and eligible legacy file archives in the
+Keep the minimum OpenCode version at 2.1.4 for native restore. Traverse the
+selected family and clear `archived` on each session, including cross-project
+descendants. Keep root-project scope and exact-directory scope for `global`.
+Native restore must not export, import, delete, or create JSON files, and must not
+fall back to the file lifecycle if its API is unavailable.
+
+Combine native archived root families and eligible file archives in the
 existing restore picker, newest archive date first. Group native families by
 adjacent archived parent links. A root or descendant ID selects its highest
-archived ancestor's family; legacy archive UUIDs remain supported. Native restore
+archived ancestor's family; file archive UUIDs remain supported. Native restore
 traverses the current subtree, not a saved batch, and can include descendants
 archived separately. File restore keeps its exact saved tree.
 
-Retain existing file validation, version-1/2 reading, exact mappings, parent-first
-imports, and recorded-commit worktree recovery only for legacy files. Native
-restore does not apply mappings or recreate removed locations. Report partial
-native update progress without rollback; do not add transaction or race guards.
-Keep permanent native deletion unchanged.
+Retain file validation, version-1/2 reading, version-2 creation, exact mappings,
+parent-first imports, and recorded-commit worktree recovery for file archives.
+Native restore does not apply mappings or recreate removed locations. Report
+partial native update progress without rollback; do not add transaction or race
+guards. Keep permanent native deletion unchanged.
+
+Deliver archive slash feedback through the typed live
+`Archives.events.archiveResult` event containing operation ID, session ID,
+started/success/error variant, and message. TUI listeners track operations started
+in the visible invoking session. Start and completion toasts remain visible even
+if deletion sends that TUI home; unrelated operations are ignored. Listeners
+unsubscribe on unload. Events are not replayed and disconnected
+clients can miss them; command errors are still thrown normally. Palette actions
+keep their own toast, not slash feedback. Desktop retains result forms when the
+invoking session survives; never attach forms to deleted sessions. Do not add
+duplicate slash entries.
 
 ## Consequences
 
-Session IDs, messages, hierarchy, fork/revert state, and environment state remain
-in the native database rather than being reconstructed from transcripts. Native
-archives are not backups and permanent deletion can remove them. Tree updates
-are not atomic and do not stop active work; failures can leave partial state.
+New archives still depend on transcript export/import limits and destructive
+deletion. Rechecks cannot prevent writes or new descendants in the final gap
+from being lost. Users must stop other clients and automations before archiving.
+Files remain private, unencrypted transcript copies, not full runtime or project
+backups.
+
+Existing native archives preserve their database state until explicitly restored
+or deleted. Native archives are not backups and permanent deletion can remove
+them. Native restore updates are not atomic and do not stop active work; failures
+can leave partial state.
 
 Missing locations can cause server middleware to reject native updates. Users
-must restore required directories and project files separately. Legacy worktree
-recovery remains available only where existing files contain the required
-metadata. Supporting two restore sources preserves old data without creating
-more file archives or imposing legacy import restrictions on native state.
+must restore required directories and project files separately. File worktree
+recovery remains available where files contain the required metadata. Supporting
+both restore sources avoids leaving existing native archives inaccessible while
+native creation and migration remain deferred.

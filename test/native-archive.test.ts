@@ -25,6 +25,11 @@ function fixture() {
     ['ses_other', info('ses_other')],
     ['ses_child', { ...info('ses_child', 'ses_root'), projectID: 'project-b' }],
   ]);
+  for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
+    const session = state.get(id);
+    assert(session);
+    session.time.archived = 100;
+  }
   const updates: Array<{ id: string; archived: boolean }> = [];
   let failID: string | undefined;
   let ignoreID: string | undefined;
@@ -69,7 +74,7 @@ function fixture() {
 
 const scope = { projectID: 'project-a', directory: '/synthetic/project' };
 
-test('native archive and descendant-ID restore preserve the entire current family without changing unrelated sessions', async () => {
+test('native descendant-ID restore preserves the entire current family without changing unrelated sessions', async () => {
   const f = fixture();
   const root = f.state.get('ses_root');
   const child = f.state.get('ses_child');
@@ -80,12 +85,11 @@ test('native archive and descendant-ID restore preserve the entire current famil
   };
   child.revert = { messageID: 'msg_reverted', snapshot: 'snapshot_retained' };
   const original = structuredClone(f.state);
-  await f.service.archive(await f.service.preview('ses_root'));
-  assert.deepEqual(f.updates, [
-    { id: 'ses_grandchild', archived: true },
-    { id: 'ses_child', archived: true },
-    { id: 'ses_root', archived: true },
-  ]);
+  for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
+    const session = original.get(id);
+    assert(session);
+    delete session.time.archived;
+  }
   const choices = await f.service.list(scope, 'ses_grandchild');
   assert.deepEqual(choices, [
     {
@@ -99,7 +103,7 @@ test('native archive and descendant-ID restore preserve the entire current famil
   const selected = choices[0];
   assert(selected);
   await f.service.restore(selected.id, scope, 'ses_grandchild');
-  assert.deepEqual(f.updates.slice(3), [
+  assert.deepEqual(f.updates, [
     { id: 'ses_root', archived: false },
     { id: 'ses_child', archived: false },
     { id: 'ses_grandchild', archived: false },
@@ -109,8 +113,6 @@ test('native archive and descendant-ID restore preserve the entire current famil
 
 test('native restore checks root project, global directory, and requested descendant before any update', async () => {
   const f = fixture();
-  await f.service.archive(await f.service.preview('ses_root'));
-  f.updates.length = 0;
   for (const [projectScope, target] of [
     [{ ...scope, projectID: 'project-b' }, undefined],
     [scope, 'ses_other'],
@@ -141,10 +143,12 @@ test('descendant lookup selects the target archived group or an archived ancesto
       async () => {
         const f = fixture();
         const root = f.state.get('ses_root');
+        const child = f.state.get('ses_child');
         const grandchild = f.state.get('ses_grandchild');
-        assert(root && grandchild);
+        assert(root && child && grandchild);
         root.time.archived = 100;
-        if (archivedTarget) grandchild.time.archived = 101;
+        delete child.time.archived;
+        if (!archivedTarget) delete grandchild.time.archived;
         const target = archivedTarget ? 'ses_grandchild' : 'ses_child';
         const selected = archivedTarget ? 'ses_grandchild' : 'ses_root';
         assert.deepEqual(
@@ -163,22 +167,17 @@ test('descendant lookup selects the target archived group or an archived ancesto
     );
 });
 
-test('partial or unapplied native flags are not reported as complete and never reversed automatically', async (t) => {
-  for (const mode of ['archive failure', 'restore failure', 'unapplied update'])
+test('partial or unapplied native restore is not reported as complete and is never reversed automatically', async (t) => {
+  for (const mode of ['restore failure', 'unapplied update'])
     await t.test(mode, async () => {
       const f = fixture();
-      const restore = mode === 'restore failure';
-      if (restore) await f.service.archive(await f.service.preview('ses_root'));
-      f.updates.length = 0;
       if (mode === 'unapplied update') f.ignore('ses_child');
       else f.fail('ses_child');
       await assert.rejects(
-        restore
-          ? f.service.restore('ses_root', scope)
-          : f.service.archive(await f.service.preview('ses_root')),
+        f.service.restore('ses_root', scope),
         /did not complete; 1 session\(s\) verified.*No sessions were deleted or imported/,
       );
-      assert(f.updates.every((update) => update.archived === !restore));
+      assert(f.updates.every((update) => update.archived === false));
       assert.equal(f.state.get('ses_grandchild')?.time.archived, 100);
       assert.equal(f.state.get('ses_root')?.time.archived, undefined);
       assert.equal(f.state.size, 4);

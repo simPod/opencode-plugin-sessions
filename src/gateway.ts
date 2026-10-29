@@ -10,7 +10,9 @@ export interface SessionGateway {
   resolveProject(directory: string): Promise<string>;
   children(id: string): Promise<SessionInfo[]>;
   messages(id: string): Promise<SessionMessageInfo[]>;
+  busy(id: string): Promise<boolean>;
   existing(): Promise<Set<string>>;
+  export(id: string): Promise<SessionTransferData>;
   archived(): Promise<SessionInfo[]>;
   setArchived(id: string, archived: boolean): Promise<void>;
   remove(id: string): Promise<void>;
@@ -87,6 +89,13 @@ export function gateway(
       return found;
     },
     remove: (sessionID) => client.session.remove({ sessionID }, options),
+    busy: async (sessionID) => {
+      const active = await client.session.active(options);
+      const inbox = await client.session.inbox.list({ sessionID }, options);
+      return active[sessionID] !== undefined || inbox.length !== 0;
+    },
+    export: (sessionID) =>
+      client.session.export({ sessionID, sanitize: false }, options),
     import: (data) =>
       client.session.import({ ...data, location: data.info.location }, options),
   };

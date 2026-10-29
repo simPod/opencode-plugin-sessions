@@ -7,9 +7,9 @@ version. Implements the [session archive requirements](../session-archive.md).
 The TUI-only interaction and server-storage-only decisions are superseded by
 [ADR 0002](0002-desktop-session-commands.md). Confirmation requirements are
 superseded by [ADR 0003](0003-immediate-archive-and-restore.md).
-File-backed creation and the export/delete/import lifecycle for new archives are
-superseded by [ADR 0011](0011-native-session-archives.md). This ADR remains the
-historical basis for legacy file restoration.
+File-backed creation and the export/delete/import lifecycle remain in use.
+[ADR 0011](0011-native-session-archives.md) records why native creation is deferred
+and how existing native archives remain restorable without file migration.
 
 ## Context
 

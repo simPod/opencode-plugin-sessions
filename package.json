@@ -1,7 +1,7 @@
 {
   "name": "@simpod/opencode-plugin-sessions",
   "version": "0.1.0",
-  "description": "OpenCode V2 native session archives with legacy transcript restoration.",
+  "description": "OpenCode V2 file-backed session archives with native archive restoration.",
   "type": "module",
   "private": true,
   "packageManager": "pnpm@10.33.3",

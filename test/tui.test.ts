@@ -49,6 +49,7 @@ async function scenario(pluginURL: string) {
   };
   const state = new Map([[original.info.id, structuredClone(original)]]);
   const bundles = new Map<string, ArchiveBundle>();
+  let savedID: string | undefined;
   let commands: Layer['commands'];
   const selections: Array<readonly { value: string }[]> = [];
   const lookups: Array<{ sessionID?: string }> = [];
@@ -82,6 +83,7 @@ async function scenario(pluginURL: string) {
       file: { list: async () => ({ location, data: [] }) },
       location: { get: async () => ({ project: { id: 'test-project' } }) },
       rpc: () => ({
+        events: { on: () => () => {} },
         restoreMappings: async () => [
           {
             from: {
@@ -117,7 +119,12 @@ async function scenario(pluginURL: string) {
           beforeRead?.();
           return structuredClone(bundle(id));
         },
-        save: async () => assert.fail('Native archive must not save a bundle'),
+        save: async (input: { bundle: ArchiveBundle }) => {
+          const item = structuredClone(input.bundle);
+          savedID = item.id;
+          bundles.set(item.id, item);
+          return { id: item.id, path: '/synthetic/archive.json' };
+        },
         worktreeCapture: async () => [],
         worktreeMissing: async () => [],
       }),
@@ -154,6 +161,10 @@ async function scenario(pluginURL: string) {
           if (archived) info.time.archived = 4;
           else delete info.time.archived;
         },
+        active: async () => ({}),
+        inbox: { list: async () => [] },
+        export: async ({ sessionID }: { sessionID: string }) =>
+          structuredClone(session(sessionID)),
         remove: async ({ sessionID }: { sessionID: string }) => {
           removals++;
           const pending = [sessionID];
@@ -245,30 +256,35 @@ async function scenario(pluginURL: string) {
   const unrelated = structuredClone(original);
   unrelated.info.id = 'ses_other';
   state.set('ses_other', unrelated);
-  tabs.push(
-    { sessionID: 'ses_test' },
-    { sessionID: 'ses_child' },
-    { sessionID: 'ses_other' },
-  );
   route = { type: 'session', sessionID: 'ses_child' };
-  const beforeNativeArchive = structuredClone(state);
-  await archive.run('ses_test');
-  assert.equal(session('ses_test').info.time.archived, 4);
-  assert.equal(session('ses_child').info.time.archived, 4);
-  assert.deepEqual(session('ses_other'), unrelated);
-  assert.equal(route.type, 'home');
-  assert.deepEqual(tabs, [{ sessionID: 'ses_other' }]);
+  const expectedRestoredState = structuredClone(state);
+  // Native restore remains available for sessions archived by other clients.
+  session('ses_test').info.time.archived = 4;
+  session('ses_child').info.time.archived = 4;
   await restore.run('ses_child');
-  assert.deepEqual(state, beforeNativeArchive);
+  assert.deepEqual(state, expectedRestoredState);
   assert.deepEqual(route, { type: 'session', sessionID: 'ses_test' });
   assert.equal(imports, 0);
   assert.equal(removals, 0);
   assert.equal(bundles.size, 0);
   lookups.length = 0;
 
-  // Legacy compatibility is independent of native archive creation.
-  const savedID = randomUUID();
-  const root = structuredClone(original);
+  // New archives stay file-backed until the upstream picker hides native archives.
+  state.clear();
+  state.set('ses_test', structuredClone(original));
+  route = { type: 'session', sessionID: 'ses_test' };
+  const beforeArchiveToasts = toasts.length;
+  await archive.run();
+  assert.equal(state.size, 0);
+  assert(savedID);
+  assert.deepEqual(bundle(savedID).sessions, [original]);
+  assert.equal(route.type, 'home');
+  assert.equal(toasts.length, beforeArchiveToasts + 1);
+  assert.equal(toasts.at(-1)?.variant, 'success');
+  const archived = bundle(savedID);
+  archived.projectID = 'old-project';
+  const root = archived.sessions[0];
+  assert(root);
   root.info.projectID = 'old-project';
   root.info.location.directory = '/synthetic/old-project';
   const child = structuredClone(root);
@@ -276,16 +292,7 @@ async function scenario(pluginURL: string) {
   child.info.parentID = 'ses_test';
   assert(child.messages[0]);
   child.messages[0].id = 'msg_child';
-  const archived: ArchiveBundle = {
-    format: 'opencode-session-archive',
-    version: 1,
-    id: savedID,
-    createdAt: 3,
-    projectID: 'old-project',
-    rootSessionID: 'ses_test',
-    sessions: [root, child],
-  };
-  bundles.set(savedID, archived);
+  archived.sessions.push(child);
   const originalArchive = structuredClone(archived);
 
   for (const argument of [undefined, savedID, 'ses_test', 'ses_child']) {
@@ -510,6 +517,93 @@ test('TUI palette actions archive, restore, and delete immediately without dupli
   assert.match(result.stdout, /completed without confirmation/);
 });
 
+async function slashArchiveScenario(pluginURL: string) {
+  const assert: typeof import('node:assert').strict = (
+    await import('node:assert')
+  ).strict;
+  const { default: plugin }: typeof import('../src/tui.ts') =
+    await import(pluginURL);
+  type Result = import('zod').infer<typeof import('../src/rpc.ts').ArchiveResult>;
+  const listeners = new Set<(event: { data: Result }) => void>();
+  const emit = (data: Result) => {
+    for (const listener of listeners) listener({ data });
+  };
+  let route: ReturnType<Plugin.Context['ui']['router']['current']> = {
+    type: 'session',
+    sessionID: 'ses_owner',
+  };
+  const toasts: Array<Parameters<Plugin.Context['ui']['toast']['show']>[0]> = [];
+  const cleanup = await plugin.setup({
+    client: {
+      rpc: () => ({
+        events: {
+          on: (name: string, listener: (event: { data: Result }) => void) => {
+            assert.equal(name, 'archiveResult');
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        },
+      }),
+    },
+    keymap: { layer: () => {} },
+    data: { on: () => () => {} },
+    ui: {
+      router: { current: () => route },
+      toast: { show: (toast: (typeof toasts)[number]) => toasts.push(toast) },
+    },
+  } as unknown as Plugin.Context);
+  assert.equal(listeners.size, 1, 'Slash archive results need a TUI listener');
+  const success: Result = {
+    operationID: '617c0d9d-667d-4dcb-86c6-48cbab235c09',
+    sessionID: 'ses_owner',
+    variant: 'success',
+    message: '2 sessions archived. Archive saved.',
+  };
+  emit({ ...success, sessionID: 'ses_foreign' });
+  route = { type: 'home' };
+  emit(success);
+  assert.equal(toasts.length, 0);
+  route = { type: 'session', sessionID: 'ses_owner' };
+  const started: Result = {
+    ...success,
+    variant: 'started',
+    message: 'Archiving session tree.',
+  };
+  emit(started);
+  assert.equal(toasts.at(-1)?.variant, 'info');
+  // Native session.deleted navigation precedes the server's archive result.
+  route = { type: 'home' };
+  emit(success);
+  route = { type: 'session', sessionID: 'ses_other' };
+  emit(success);
+  const error: Result = {
+    operationID: 'a48bc161-251c-401a-975f-589689dfb55c',
+    sessionID: 'ses_other',
+    variant: 'error',
+    message: 'The session is busy. Nothing was deleted.',
+  };
+  emit(error);
+  assert.deepEqual(toasts, [
+    { title: 'Session archive', variant: 'info', message: started.message },
+    { title: 'Session archive', variant: success.variant, message: success.message },
+    { title: 'Session archive', variant: error.variant, message: error.message },
+  ]);
+  assert(typeof cleanup === 'function');
+  await cleanup();
+  assert.equal(listeners.size, 0);
+  emit(error);
+  assert.equal(toasts.length, 3);
+}
+
+test('terminal slash archive follows completion after deletion navigation, ignores unrelated results, and unsubscribes', async () => {
+  const script = `await (${slashArchiveScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
+  await execute(
+    process.execPath,
+    ['--experimental-strip-types', '--input-type=module', '-e', script],
+    { timeout: 5_000 },
+  );
+});
+
 async function pickerScenario(pluginURL: string) {
   const assert: typeof import('node:assert').strict = (
     await import('node:assert')
@@ -547,6 +641,7 @@ async function pickerScenario(pluginURL: string) {
     client: {
       location: { get: async () => ({ project: { id: 'test-project' } }) },
       rpc: () => ({
+        events: { on: () => () => {} },
         restoreMappings: async () => [],
         list: async () => [older, newer],
         read: () =>
@@ -651,7 +746,7 @@ async function slashPickerScenario(
     finish();
   };
   const cleanup = await plugin.setup({
-    client: { rpc: () => ({}) },
+    client: { rpc: () => ({ events: { on: () => () => {} } }) },
     keymap: { layer: () => {} },
     data: {
       on: (_type: string, handler: NonNullable<typeof receive>) => {
@@ -857,6 +952,7 @@ test('TUI worktree recovery is automatic and uses scoped archive-bound RPC', asy
         file: { list: async () => ({ location, data: [] }) },
         location: { get: async () => ({ project: { id: 'test-project' } }) },
         rpc: () => ({
+          events: { on: () => () => {} },
           restoreMappings: async () => [],
           read: async ({ id }, scope) => { assertScope(scope); assert.equal(id, bundle.id); return structuredClone(bundle); },
           worktreeMissing: async ({ locations }, scope) => {

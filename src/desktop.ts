@@ -1,4 +1,5 @@
 import type { CommandDefinition } from '@opencode/plugin/promise/command';
+import { randomUUID } from 'node:crypto';
 import type { DesktopHost } from './desktop-client.ts';
 import { SessionDelete } from './delete.ts';
 import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
@@ -17,14 +18,16 @@ import {
 import { SessionArchive } from './service.ts';
 import { restoreRecoveryMessage } from './worktree-recovery.ts';
 import type { WorktreeGateway } from './worktrees.ts';
+import type { ArchiveResult } from './rpc.ts';
 
 export function desktopCommands(
   connect: () => Promise<DesktopHost>,
   storage: ArchiveStorage,
   scope: { projectID: string; directory: string },
   signal: AbortSignal,
-  restoreMappings: RestoreMapping[] = [],
-  worktrees?: WorktreeGateway,
+  restoreMappings: RestoreMapping[],
+  worktrees: WorktreeGateway | undefined,
+  notifyArchive: (result: ArchiveResult) => Promise<void>,
 ): CommandDefinition[] {
   const projectID = scope.projectID;
   let running = false;
@@ -36,38 +39,62 @@ export function desktopCommands(
       host: DesktopHost,
       sessionID: string,
       argument: string,
+      operationID: string,
     ) => Promise<void>,
   ): CommandDefinition {
     return {
       name,
       description,
       async execute({ sessionID, prompt, delivery }) {
-        if (running)
-          throw new Error('Another session operation is in progress.');
-        running = true;
+        const operationID = randomUUID();
         try {
-          signal.throwIfAborted();
-          if (delivery === 'queue')
-            throw new Error(
-              'Session commands run immediately and cannot be queued.',
-            );
-          if (
-            prompt.files?.length ||
-            prompt.agents?.length ||
-            prompt.skills?.length
-          )
-            throw new Error(
-              'Session commands do not accept attachments or mentions.',
-            );
-          const host = await connect();
-          const session = await host.sessions.get(sessionID);
-          if (session.projectID !== projectID)
-            throw new Error(
-              'The command belongs to another project. Nothing was changed.',
-            );
-          await run(host, sessionID, prompt.text.trim());
-        } finally {
-          running = false;
+          if (running)
+            throw new Error('Another session operation is in progress.');
+          running = true;
+          try {
+            signal.throwIfAborted();
+            if (delivery === 'queue')
+              throw new Error(
+                'Session commands run immediately and cannot be queued.',
+              );
+            if (
+              prompt.files?.length ||
+              prompt.agents?.length ||
+              prompt.skills?.length
+            )
+              throw new Error(
+                'Session commands do not accept attachments or mentions.',
+              );
+            const host = await connect();
+            const session = await host.sessions.get(sessionID);
+            if (session.projectID !== projectID)
+              throw new Error(
+                'The command belongs to another project. Nothing was changed.',
+              );
+            if (name === 'session-archive')
+              await notifyArchive({
+                operationID,
+                sessionID,
+                variant: 'started',
+                message: 'Archiving session tree.',
+              });
+            await run(host, sessionID, prompt.text.trim(), operationID);
+          } finally {
+            running = false;
+          }
+        } catch (error) {
+          if (name === 'session-archive') {
+            await notifyArchive({
+              operationID,
+              sessionID,
+              variant: 'error',
+              message:
+                error instanceof Error ? error.message : 'Archiving failed.',
+            }).catch(() => {
+              // Preserve the command error if live feedback cannot be delivered.
+            });
+          }
+          throw error;
         }
       },
     };
@@ -206,12 +233,12 @@ export function desktopCommands(
     ),
     command(
       'session-archive',
-      'Archive a session tree natively without deleting its data',
-      async (host, sessionID, argument) => {
+      'Save and verify a session tree, then remove it from OpenCode',
+      async (host, sessionID, argument, operationID) => {
         const target = argument || sessionID;
         if (!SessionID.safeParse(target).success)
           throw new Error('Use /session-archive [sessionID].');
-        const service = new NativeSessionArchive(host.sessions);
+        const service = new SessionArchive(host.sessions, storage, worktrees);
         const preview = await service.preview(target);
         if (
           preview.projectID !== projectID ||
@@ -221,20 +248,33 @@ export function desktopCommands(
             'The session belongs to another project. Nothing was changed.',
           );
         signal.throwIfAborted();
-        await service.archive(preview);
-        // Do not attach a result form to the newly archived tree.
+        const saved = await service.archive(preview);
+        const message = `${preview.sessionIDs.length} session(s) archived. Archive: ${saved.id}\nServer file: ${saved.path}`;
+        // Never attach a result form to a deleted session.
         if (!preview.sessionIDs.includes(sessionID)) {
           try {
             await host.report(
               sessionID,
               'Session tree archived',
-              `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${target}.`,
+              message,
             );
           } catch {
             throw new Error(
-              `The tree was archived, but the desktop result could not be shown. Restore with /session-restore ${target}.`,
+              `The tree was archived, but the result could not be shown. Archive retained: ${saved.id}\nServer file: ${saved.path}`,
             );
           }
+        }
+        try {
+          await notifyArchive({
+            operationID,
+            sessionID,
+            variant: 'success',
+            message,
+          });
+        } catch {
+          throw new Error(
+            `The tree was archived, but TUI feedback could not be delivered. Archive retained: ${saved.id}\nServer file: ${saved.path}`,
+          );
         }
       },
     ),
