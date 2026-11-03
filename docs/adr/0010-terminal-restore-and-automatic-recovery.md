@@ -8,6 +8,10 @@ Accepted. Implements the updated
 decision and extends [ADR 0007](0007-server-owned-slash-commands.md)'s terminal
 presentation.
 
+[ADR 0012](0012-popup-only-terminal-restore.md) supersedes only the selection
+presentation and execution decision below. Automatic worktree recovery and
+server-executed explicit-ID result handling remain in force.
+
 ## Context
 
 The terminal's server-owned restore command uses a question list that is hard to

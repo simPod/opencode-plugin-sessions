@@ -32,11 +32,23 @@ and restore descriptions to distinguish file archive creation from native
 restore; retain the permanent-delete warning.
 
 Desktop uses native question panels. Terminal restore recognizes plugin-marked
-selection forms, uses the same searchable picker as its palette action, and
-replies to or cancels the original form through the connected client. Only the
-server performs slash restoration. The terminal acknowledges its marked result,
-refreshes the family, opens the restored root if the invoking session is still
-visible, and shows a toast. Archive slash results also use the typed live RPC
+selection forms for the visible session. Await cancellation of the original form
+through the public connected-client API before opening the searchable popup used
+by the palette action. The native form may appear briefly before cancellation
+completes, but must not remain behind the popup. Failed cancellation must not open
+the popup or run restore. The server's cancelled selection returns no answer and
+performs no restore. After a choice, the TUI restores the exact selected archive
+through the existing restore engine, using the form event's location and any
+original target session-ID constraint. Do not reply to the cancelled form, parse
+the selected archive ID as a new lookup, or open a second picker. Cancellation,
+failure, or plugin unload before a choice must make no session changes.
+
+Unambiguous explicit-ID slash restore remains server-executed. The terminal
+acknowledges its marked result and refreshes the family without repeating restore.
+The popup path opens the restored root and shows a toast. The server-result path
+opens it only if the invoking session is still visible. Desktop retains native
+selection when no TUI takes over.
+Archive slash results also use the typed live RPC
 event `Archives.events.archiveResult` with
 `{ operationID, sessionID, variant, message }`, where `variant` is `started`,
 `success`, or `error`. Track operations that start in the visible invoking session
@@ -56,7 +68,10 @@ embedded slash hosts without it. TUI palette actions use their existing connecte
 client and server RPCs, including remote and standalone support. Never discover
 or start another server. Forms have no originating-client identity: another
 client viewing the same session can answer them. Use one client for restore;
-pending forms after reload remain available in the native question UI.
+the cancelled form is not an exclusive client claim. After successful cancellation,
+the popup is not durable. Cancellation or reload before a choice requires running
+the command again; do not promise a pending native-form fallback. Use no private
+form-cache or renderer patches to hide forms.
 
 ## File archive creation
 
@@ -195,6 +210,10 @@ Verify that both archive entry paths save and verify files before deletion, and
 that native restore changes flags without transcript import. Retain mixed-source
 picker and ID lookup coverage, private file validation, exact-commit recovery,
 partial-failure reporting, deletion guards, and distinct slash/palette feedback.
+Verify cancellation completes before popup selection, failed cancellation cannot
+start restore, and the selected archive is restored exactly once without a form
+reply or another lookup. Retain server-executed explicit-ID restore and desktop
+native selection.
 No rollout step migrates files or rewrites existing native archives. Reconsider
 native creation and migration only after the native TUI picker excludes archived
 sessions; do not treat a successful flag update alone as sufficient.
@@ -205,4 +224,5 @@ Keep the package unpublished on npm and install the built checkout. See
 decision,
 [ADR 0008](adr/0008-immediate-session-deletion.md) for deletion, and
 [ADR 0010](adr/0010-terminal-restore-and-automatic-recovery.md) for terminal
-presentation and legacy worktree recovery.
+restore history and legacy worktree recovery, refined by
+[ADR 0012](adr/0012-popup-only-terminal-restore.md) for popup-only selection.

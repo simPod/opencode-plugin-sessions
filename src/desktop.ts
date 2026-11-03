@@ -7,6 +7,7 @@ import { fingerprint } from './fingerprint.ts';
 import { canRestore } from './restore-storage.ts';
 import {
   restorePickerMetadataKey,
+  restorePickerTargetMetadataKey,
   restoreResultMetadataKey,
 } from './restore-picker.ts';
 import {
@@ -150,7 +151,12 @@ export function desktopCommands(
               })),
             },
           ],
-          { [restorePickerMetadataKey]: archives },
+          {
+            [restorePickerMetadataKey]: archives,
+            ...(targetSessionID && {
+              [restorePickerTargetMetadataKey]: targetSessionID,
+            }),
+          },
         );
         if (!answer) return;
         if (

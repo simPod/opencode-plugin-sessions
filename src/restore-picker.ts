@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { SessionID, RestoreSummary } from './schema.ts';
 
 export const restorePickerMetadataKey = 'simpod.session-restore.archives';
+export const restorePickerTargetMetadataKey =
+  'simpod.session-restore.targetSessionID';
 export const RestorePickerArchives = z.array(RestoreSummary).min(1);
 export const restoreResultMetadataKey = 'simpod.session-restore.result';
 export const RestorePickerResult = z.strictObject({

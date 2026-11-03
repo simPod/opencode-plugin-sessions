@@ -11,6 +11,7 @@ import {
   RestorePickerResult,
   restorePickerMetadataKey,
   restorePickerOptions,
+  restorePickerTargetMetadataKey,
   restoreResultMetadataKey,
 } from './restore-picker.ts';
 import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
@@ -225,7 +226,7 @@ export default Plugin.define({
       ) {
         throw new Error('Provide a session ID or archive UUID to restore.');
       }
-      const { storage, restoreMappings, projectID } = await scoped(location);
+      const { storage, projectID } = await scoped(location);
       const native = new NativeSessionArchive(
         gateway(context.client, lifetime.signal),
       );
@@ -260,6 +261,19 @@ export default Plugin.define({
         }
       }
 
+      await restoreSelected(location, id, targetSessionID);
+    }
+
+    async function restoreSelected(
+      location: LocationRef,
+      id: string,
+      targetSessionID?: string,
+    ): Promise<void> {
+      const { storage, restoreMappings, projectID } = await scoped(location);
+      const native = new NativeSessionArchive(
+        gateway(context.client, lifetime.signal),
+      );
+      const scope = { projectID, directory: location.directory };
       let restored: {
         rootSessionID: string;
         sessionIDs: string[];
@@ -313,8 +327,8 @@ export default Plugin.define({
       });
     }
 
-    // Slash commands remain server-owned. Marked selection and result forms
-    // get terminal presentation without running restoration a second time.
+    // Keep one server-owned slash entry. Cancel its selection form before the
+    // popup takes over; explicit-ID restores still acknowledge server results.
     const stopRestorePicker = context.data.on('form.created', (event) => {
       const form = event.data.form;
       const route = context.ui.router.current();
@@ -372,21 +386,26 @@ export default Plugin.define({
       const archives = RestorePickerArchives.safeParse(
         form.metadata?.[restorePickerMetadataKey],
       );
-      if (!archives.success) return;
+      if (!archives.success || !location) return;
       void operate(async () => {
+        const targetSessionID = SessionID.optional().parse(
+          form.metadata?.[restorePickerTargetMetadataKey],
+        );
+        await context.data.session.form.cancel(
+          { sessionID: form.sessionID, formID: form.id },
+          location,
+        );
+        lifetime.signal.throwIfAborted();
         const id = await context.ui.dialog.select(
           restorePickerOptions(archives.data),
         );
         lifetime.signal.throwIfAborted();
-        const input = { sessionID: form.sessionID, formID: form.id };
-        if (id === undefined) {
-          await context.data.session.form.cancel(input, location);
-        } else {
-          await context.data.session.form.reply(
-            { ...input, answer: { archive: id } },
-            location,
+        if (id === undefined) return;
+        if (!archives.data.some((archive) => archive.id === id))
+          throw new Error(
+            'Select an archive from this project. Nothing was restored.',
           );
-        }
+        await restoreSelected(location, id, targetSessionID);
       });
     });
 

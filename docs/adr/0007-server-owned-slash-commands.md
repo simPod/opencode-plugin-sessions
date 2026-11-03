@@ -6,6 +6,11 @@ Accepted. Refines command exposure in
 [ADR 0002](0002-desktop-session-commands.md). Implements the single-entry
 requirement in the [session archive PRD](../session-archive.md).
 
+Terminal restore presentation and navigation are refined by
+[ADR 0010](0010-terminal-restore-and-automatic-recovery.md) and
+[ADR 0012](0012-popup-only-terminal-restore.md). The server keeps the single slash
+entry; terminal selection can hand execution to the TUI without another entry.
+
 ## Context
 
 OpenCode V2 combines server and TUI slash-command lists without removing duplicate

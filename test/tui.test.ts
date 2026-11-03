@@ -7,6 +7,7 @@ import type {
   OpenCodeEvent,
   SessionFormCancelInput,
   SessionFormReplyInput,
+  SessionInfo,
   SessionTransferData,
 } from '@opencode/client';
 import type { Plugin } from '@opencode/plugin/tui';
@@ -706,7 +707,13 @@ test('TUI restore picker combines native and legacy IDs in searchable newest-fir
 
 async function slashPickerScenario(
   pluginURL: string,
-  outcome: 'select' | 'cancel' | 'result' | 'refresh-error',
+  outcome:
+    | 'select'
+    | 'cancel'
+    | 'cancel-error'
+    | 'target-mismatch'
+    | 'result'
+    | 'refresh-error',
 ) {
   const assert: typeof import('node:assert').strict = (
     await import('node:assert')
@@ -727,26 +734,109 @@ async function slashPickerScenario(
     createdAt: 1_700_000_000_000,
     sessionCount: 2,
   };
+  const native: SessionInfo = {
+    id: archive.id,
+    projectID: 'test-project',
+    title: archive.title,
+    location,
+    cost: 0,
+    tokens: {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+    time: { created: 1, updated: 2, archived: archive.createdAt },
+  };
+  const child: SessionInfo = {
+    ...structuredClone(native),
+    id: 'ses_child',
+    parentID: native.id,
+  };
+  const sessions = new Map([
+    [native.id, native],
+    [child.id, child],
+  ]);
+  const originalSessions = structuredClone(sessions);
+  const legacy = {
+    ...archive,
+    id: 'f29e8df0-88b2-4d1b-b0fc-edc5f924dc00',
+  };
   let receive: ((event: Created) => void) | undefined;
   let unsubscribed = false;
-  let picker: Picker | undefined;
+  let inlineFormVisible = true;
+  const pickers: Picker[] = [];
+  const inlineAtPopup: boolean[] = [];
   let route = { type: 'session', sessionID: 'ses_owner' };
   const replies: SessionFormReplyInput[] = [];
   const cancellations: SessionFormCancelInput[] = [];
+  const writes: Array<{ sessionID: string; archived: boolean }> = [];
   const refreshed: string[] = [];
   const opened: string[] = [];
   const toasts: Array<Parameters<Plugin.Context['ui']['toast']['show']>[0]> =
     [];
-  let finish: (() => void) | undefined;
-  const finished = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const complete = () => {
-    assert(finish);
-    finish();
-  };
   const cleanup = await plugin.setup({
-    client: { rpc: () => ({ events: { on: () => () => {} } }) },
+    // The form location, not the TUI default or its current session, owns restore.
+    location: { directory: '/synthetic/default-project' },
+    client: {
+      location: {
+        get: async (input: { location: LocationRef }) => {
+          assert.deepEqual(input.location, location);
+          return { project: { id: 'test-project' } };
+        },
+      },
+      rpc: () => ({
+        events: { on: () => () => {} },
+        restoreMappings: async (
+          _input: object,
+          scope: { location: LocationRef },
+        ) => {
+          assert.deepEqual(scope.location, location);
+          return [];
+        },
+        // A lookup of the selected native ID would find both formats and open
+        // another picker instead of restoring the archive the user selected.
+        list: async () => [legacy],
+        read: () =>
+          assert.fail('A native selection must not read a legacy archive'),
+      }),
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) => {
+          const session = sessions.get(sessionID);
+          assert(
+            session,
+            'Restore must use the form location, not look up its owner',
+          );
+          return structuredClone(session);
+        },
+        list: async ({
+          parentID,
+          archived,
+        }: {
+          parentID?: string;
+          archived?: boolean;
+        }) => ({
+          data: [...sessions.values()]
+            .filter(
+              (session) =>
+                (parentID === undefined || session.parentID === parentID) &&
+                (archived === undefined ||
+                  (session.time.archived !== undefined) === archived),
+            )
+            .map((session) => structuredClone(session)),
+          cursor: {},
+        }),
+        update: async (input: { sessionID: string; archived: boolean }) => {
+          writes.push(input);
+          const session = sessions.get(input.sessionID);
+          assert(session);
+          assert.equal(input.archived, false);
+          delete session.time.archived;
+        },
+        import: () => assert.fail('Native restore must not import a session'),
+        remove: () => assert.fail('Native restore must not delete a session'),
+      },
+    },
     keymap: { layer: () => {} },
     data: {
       on: (_type: string, handler: NonNullable<typeof receive>) => {
@@ -765,12 +855,15 @@ async function slashPickerScenario(
           reply: async (input: SessionFormReplyInput, scope: LocationRef) => {
             assert.deepEqual(scope, location);
             replies.push(input);
-            if (outcome === 'select') complete();
           },
           cancel: async (input: SessionFormCancelInput, scope: LocationRef) => {
             assert.deepEqual(scope, location);
             cancellations.push(input);
-            complete();
+            if (outcome === 'cancel-error')
+              throw new Error('Cancel unavailable');
+            // Clearing the inline form is asynchronous in the public host API.
+            await Promise.resolve();
+            inlineFormVisible = false;
           },
         },
       },
@@ -785,7 +878,13 @@ async function slashPickerScenario(
       tabs: { open: (sessionID: string) => opened.push(sessionID) },
       dialog: {
         select: async (options: Picker) => {
-          picker = options;
+          pickers.push(options);
+          inlineAtPopup.push(inlineFormVisible);
+          assert.equal(
+            pickers.length,
+            1,
+            'A selected native ID must not open another picker',
+          );
           return outcome === 'cancel' ? undefined : archive.id;
         },
         confirm: () => assert.fail('Restore must not ask for confirmation'),
@@ -793,7 +892,6 @@ async function slashPickerScenario(
       toast: {
         show: (toast: (typeof toasts)[number]) => {
           toasts.push(toast);
-          complete();
         },
       },
     },
@@ -816,7 +914,15 @@ async function slashPickerScenario(
             options: [{ value: archive.id, label: archive.title }],
           },
         ],
-        metadata: { 'simpod.session-restore.archives': [archive] },
+        metadata: {
+          'simpod.session-restore.archives': [archive, legacy],
+          ...(outcome === 'cancel'
+            ? {}
+            : {
+                'simpod.session-restore.targetSessionID':
+                  outcome === 'target-mismatch' ? 'ses_missing' : 'ses_child',
+              }),
+        },
       },
     },
   };
@@ -844,8 +950,11 @@ async function slashPickerScenario(
     ];
   }
   receive(event);
-  await finished;
-  if (outcome === 'cancel') {
+  // All fake host operations settle immediately; drain the event listener's
+  // asynchronous work, including the cancellation and optional native restore.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const isResult = outcome === 'result' || outcome === 'refresh-error';
+  if (!isResult) {
     assert.deepEqual(cancellations, [
       { sessionID: 'ses_owner', formID: 'form_restore' },
     ]);
@@ -855,23 +964,60 @@ async function slashPickerScenario(
       {
         sessionID: 'ses_owner',
         formID: 'form_restore',
-        answer:
-          outcome === 'select'
-            ? { archive: archive.id }
-            : { acknowledged: 'done' },
+        answer: { acknowledged: 'done' },
       },
     ]);
+    assert.deepEqual(cancellations, []);
   }
-  if (outcome === 'select' || outcome === 'cancel') {
-    assert(picker);
-    assert.deepEqual(
-      picker.options.map((option) => option.value),
-      [archive.id],
-    );
-    assert.deepEqual(toasts, []);
-    assert.deepEqual(route, { type: 'session', sessionID: 'ses_owner' });
+  if (!isResult) {
+    assert.equal(pickers.length, outcome === 'cancel-error' ? 0 : 1);
+    assert.deepEqual(inlineAtPopup, outcome === 'cancel-error' ? [] : [false]);
+    if (outcome !== 'cancel-error') {
+      const picker = pickers[0];
+      assert(picker);
+      assert.deepEqual(
+        picker.options.map((option) => option.value),
+        [archive.id, legacy.id],
+      );
+    }
+    if (outcome === 'select') {
+      assert.deepEqual(writes, [
+        { sessionID: archive.id, archived: false },
+        { sessionID: 'ses_child', archived: false },
+      ]);
+      assert(
+        [...sessions.values()].every(
+          (session) => session.time.archived === undefined,
+        ),
+      );
+      assert.deepEqual(refreshed, [archive.id, 'ses_child']);
+      assert.deepEqual(opened, [archive.id]);
+      assert.deepEqual(route, { type: 'session', sessionID: archive.id });
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0]?.variant, 'success');
+    } else {
+      assert.deepEqual(writes, []);
+      assert.deepEqual(sessions, originalSessions);
+      assert.deepEqual(refreshed, []);
+      assert.deepEqual(opened, []);
+      assert.deepEqual(route, { type: 'session', sessionID: 'ses_owner' });
+      if (outcome === 'cancel') {
+        assert.deepEqual(toasts, []);
+      } else {
+        assert.equal(toasts.length, 1);
+        assert.equal(toasts[0]?.variant, 'error');
+        assert.match(
+          toasts[0]?.message ?? '',
+          outcome === 'cancel-error'
+            ? /Cancel unavailable/
+            : /Nothing was restored/,
+        );
+      }
+    }
   } else {
-    assert.equal(picker, undefined);
+    assert.deepEqual(pickers, []);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(sessions, originalSessions);
     assert.deepEqual(refreshed, ['ses_restored', 'ses_child']);
     assert.deepEqual(opened, outcome === 'result' ? ['ses_restored'] : []);
     assert.equal(
@@ -890,8 +1036,13 @@ async function slashPickerScenario(
   assert(unsubscribed);
 }
 
-test('terminal slash restore answers or cancels only its marked archive form', async (t) => {
-  for (const outcome of ['select', 'cancel'] as const) {
+test('terminal slash restore clears its marked inline form before the picker and restores only the selected tree', async (t) => {
+  for (const outcome of [
+    'select',
+    'cancel',
+    'cancel-error',
+    'target-mismatch',
+  ] as const) {
     await t.test(outcome, async () => {
       const script = `await (${slashPickerScenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)}, ${JSON.stringify(outcome)});`;
       await execute(

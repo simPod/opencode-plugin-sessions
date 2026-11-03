@@ -53,8 +53,12 @@ changes. Commands run immediately and cannot be queued.
 Terminal restore uses a compact, searchable picker. Type to match a title, root
 session ID, or archive ID. Results stay newest first. Use Up/Down,
 Ctrl+P/Ctrl+N, Page Up/Page Down, Home/End, Enter to restore, or Escape to
-cancel. The terminal opens the restored session and shows a toast without
-another acknowledgement. Desktop restore keeps native question panels and
+cancel. For slash selection, the terminal cancels the native question form before
+opening the popup, then restores the exact selected archive. The native form can
+appear briefly before cancellation completes, but does not remain behind the
+popup. If cancellation fails, no popup opens and no restore runs. The terminal
+opens the restored session and shows a toast without another acknowledgement.
+Desktop restore keeps native question panels and
 returns restored sessions to the list without opening them. Other result panels
 require acknowledgement, not approval of the completed operation. Archive slash
 commands show a start toast and track completion for the invoking visible session.
@@ -67,8 +71,10 @@ session list afterward. Palette actions keep their own toast.
 
 The terminal picker handles forms for the visible session. OpenCode does not
 identify the client that started a form; another client viewing that session can
-also see or answer it. Use one client for restore. If the plugin reloads during
-selection, the pending form remains available in the native question UI.
+also see or answer it. Use one client for restore. After the native form is
+cancelled, the popup is not saved: cancelling or reloading before a choice makes
+no session changes. Run `/session-restore` again; there is no pending native form
+to return to after this handoff.
 
 Submitting `/session-delete` or running its TUI palette action starts deletion
 without an approval step or a later cancellation step. Delete does not need a
@@ -316,4 +322,5 @@ pnpm build
 CI runs these commands. Tests use temporary files and a simulated API; they do
 not archive, delete, or import real OpenCode sessions. See the
 [requirements](docs/session-archive.md) and
-[architecture decision](docs/adr/0011-native-session-archives.md).
+[archive architecture decision](docs/adr/0011-native-session-archives.md), plus
+[terminal restore presentation](docs/adr/0012-popup-only-terminal-restore.md).

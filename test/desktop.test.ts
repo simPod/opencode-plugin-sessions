@@ -667,6 +667,10 @@ test('desktop session lookup limits repeated archives to the picker and rejects 
       else await f.run('session-restore', 'ses_child');
       const question = f.questions[0];
       assert(question);
+      assert.equal(
+        question.metadata?.['simpod.session-restore.targetSessionID'],
+        'ses_child',
+      );
       const field = question.fields[0];
       assert(field.type === 'string');
       assert.deepEqual(field.options?.map((option) => option.value), [
