@@ -2,15 +2,15 @@
 
 ## Goal
 
-Remove conversations from the active OpenCode session list with verified private
-file archives followed by native session-tree deletion. Keep file and existing
-native archives restorable, with permanent deletion available separately.
+Remove conversations from the active OpenCode session list with native archive
+flags while retaining their IDs, transcripts, and runtime state in the database.
+Keep native and existing file archives restorable, with permanent deletion
+available separately.
 
-Native creation is deferred because OpenCode 2.2.0's native TUI picker includes
-archived rows ([upstream issue #58364](https://github.com/anomalyco/opencode/issues/58364)).
-Keep file-backed creation until the native picker excludes them. Do not migrate
-files, change existing native archive state automatically, replace the native
-picker, or patch its filters.
+The native TUI picker must hide archived rows. Use native creation now; postpone
+file migration. Do not rewrite, move, or remove
+existing files, automatically change unrelated native archive state, replace the
+native picker, or patch its filters.
 
 ## Commands and clients
 
@@ -28,7 +28,7 @@ picker. Selecting a row restores it immediately; cancellation makes no changes.
 
 The server owns slash-command callbacks in both clients. Register TUI actions
 only in the command palette, so each slash command appears once. Update archive
-and restore descriptions to distinguish file archive creation from native
+and restore descriptions to distinguish native creation and mixed-source
 restore; retain the permanent-delete warning.
 
 Desktop uses native question panels. Terminal restore recognizes plugin-marked
@@ -50,17 +50,26 @@ opens it only if the invoking session is still visible. Desktop retains native
 selection when no TUI takes over.
 Archive slash results also use the typed live RPC
 event `Archives.events.archiveResult` with
-`{ operationID, sessionID, variant, message }`, where `variant` is `started`,
-`success`, or `error`. Track operations that start in the visible invoking session
-so deletion-to-home navigation does not suppress completion. Show the start and
-result toasts, ignore unrelated operations, and unsubscribe on TUI unload.
+`{ operationID, sessionID, variant, message, sessionIDs? }`, where `variant` is
+`started`, `success`, or `error`. The optional `sessionIDs` is a string array.
+Native success includes the exact archived IDs; started and error payloads remain
+unchanged without that field.
+Track operations that start in the visible invoking session so navigation away
+does not suppress completion. For accepted success events, clean up before the
+toast: close only archived-tree
+tabs and return home only when viewing that tree. Keep unrelated views and tabs.
+Keep unrelated result events ignored. Show start and result toasts and unsubscribe
+on TUI unload. Do not intercept generic native archive events for this cleanup.
 These events are not replayed; disconnected
 clients can miss them. Continue throwing errors through the normal command path.
 Palette archive keeps its own toast without also publishing slash feedback.
-Desktop retains result forms for surviving invoking sessions; never attach a
-result form to a deleted session. Other slash results retain native panels.
-Palette archive and delete leave the affected chat; palette delete closes only
-affected tabs. Desktop restore does not automatically open a session.
+Desktop retains result forms for invoking sessions outside the archived tree;
+archiving the invoking tree must not create a pending result form. Never attach
+a result form to a deleted session. Other slash results retain native panels.
+Successful slash and palette archive return home when viewing the archived tree
+and close only its tabs. Palette archive uses the same existing cleanup with the
+exact archived IDs. Palette delete retains its existing departure and tab cleanup.
+Desktop restore does not automatically open a session.
 
 Slash commands require the host's managed-service registration and verify that
 the connection reaches the hosting plugin instance. Refuse standalone or
@@ -73,27 +82,29 @@ the popup is not durable. Cancellation or reload before a choice requires runnin
 the command again; do not promise a pending native-form fallback. Use no private
 form-cache or renderer patches to hide forms.
 
-## File archive creation
+## Native archive creation
 
-Use file-backed creation for both slash and TUI palette archive actions. Capture
-the selected settled tree, including cross-project descendants and all message
-pages. Refuse running sessions, queued work, unfinished messages/tools, visible
-workspace IDs, and fork/revert state that import cannot preserve. Compare native
-exports against raw transcripts. Keep root-project scope and exact-directory
-scope for the shared non-Git `global` project.
+Use native creation for both slash and TUI palette archive actions. Preview the
+selected root and current descendants, including cross-project descendants. Keep
+root-project scope and exact-directory scope for the shared non-Git `global`
+project. Use the public session update API with `archived: true` for each session,
+descendants before the root, and read back each flag to verify the update.
 
-Write a private version-2 JSON archive containing the exact saved tree and
-available Git recovery metadata. Sync and publish it atomically without overwrite,
-then read it back and verify it. Recheck the tree and transcripts before native
-recursive deletion. Keep the archive after deletion errors. The final recheck is
-not atomic with deletion: concurrent writes or new descendants can still be lost.
-Tell users to stop other clients and automations before archiving; do not claim a
-lossless backup of an actively shared tree. Do not add new concurrency safeguards.
+Preserve session IDs, transcripts, parent links, fork/revert state, workspace
+identity, and other runtime fields in place. Do not export, delete, import, or
+write JSON files. Do not require settled snapshots or reject active sessions
+because of file-import limits: archive flags do not stop active runs. Do not add
+new concurrency safeguards or change the existing operation guard.
 
-## Existing native archive restore
+These per-session updates are not atomic and do not freeze the tree or capture
+a historical batch. Report verified partial progress on failure, leave completed
+updates in place, and advise inspection before retrying. Do not roll back or fall
+back to export/delete/import. Missing locations can cause the server to reject an
+update. Native state is not a backup or automatic worktree recovery.
 
-Require OpenCode 2.1.4 or newer because native restore remains supported. Do not
-create new native archives. Use the public session update API with
+## Native archive restore
+
+Require OpenCode 2.1.4 or newer. Use the public session update API with
 `archived: false` to restore each session in the selected root and current subtree,
 including descendants in other projects. Keep root-project and exact `global`
 directory scope. An unavailable native API must fail without a file
@@ -132,11 +143,12 @@ compatible. Native scope uses the archived root's project, plus exact directory
 for `global`; file scope retains explicit mapped-source eligibility. Do not
 return transcript bodies in summary RPCs or widen project scope.
 
-## File restore and storage
+## Legacy file restore and storage
 
 Keep version-1 and version-2 JSON archives readable, including cross-project
-families and non-Git descendants. Retain checksums, private storage checks,
-archive identity, and exact saved session trees. Storage still defaults to
+families and non-Git descendants. Do not create new file archives or migrate
+existing ones. Retain checksums, private storage checks, archive identity, and
+exact saved session trees. Storage still defaults to
 `~/.opencode-session-archives` on the server, configurable by `storageDirectory`.
 Stable project keys isolate repositories; Git worktrees share project storage
 and non-Git locations include their directory. Native archives do not use it.
@@ -199,29 +211,37 @@ publish them through Git or HTTP.
 ## Non-goals
 
 No direct SQLite edits, synthetic native events, automatic scheduled archiving,
-custom desktop buttons, arbitrary-file imports, archive-file deletion, native
+custom desktop buttons, arbitrary-file imports, archive-file deletion, new file
 archive creation, file migration, custom native picker/filter patches, native
 worktree recovery, or full runtime/project backups. Do not change global
 configuration or mutate real user sessions during validation.
 
 ## Acceptance and rollout
 
-Verify that both archive entry paths save and verify files before deletion, and
-that native restore changes flags without transcript import. Retain mixed-source
-picker and ID lookup coverage, private file validation, exact-commit recovery,
-partial-failure reporting, deletion guards, and distinct slash/palette feedback.
+Verify that both archive entry paths update and read back native flags with the
+root last, without file writes, transcript export/import, or session deletion.
+Verify that native restore clears flags without transcript import. Retain
+mixed-source picker and ID lookup coverage, private file validation, exact-commit recovery,
+partial-failure reporting without rollback, deletion guards, and distinct
+slash/palette feedback. Verify that native creation preserves IDs, transcripts,
+and runtime fields, accepts active trees, and creates no pending result form when
+it archives the invoking tree. Verify that accepted slash success includes exact
+archived IDs, cleans up affected tabs and views before its toast, and leaves
+unrelated views, tabs, and result events alone. Started and error events retain
+their existing payloads and feedback.
 Verify cancellation completes before popup selection, failed cancellation cannot
 start restore, and the selected archive is restored exactly once without a form
 reply or another lookup. Retain server-executed explicit-ID restore and desktop
 native selection.
-No rollout step migrates files or rewrites existing native archives. Reconsider
-native creation and migration only after the native TUI picker excludes archived
-sessions; do not treat a successful flag update alone as sufficient.
+No rollout step migrates files or automatically rewrites unrelated native
+archives. File migration remains postponed and is not a prerequisite for native
+creation.
 
 Tests use temporary files and simulated APIs, not real user session mutations.
 Keep the package unpublished on npm and install the built checkout. See
-[ADR 0011](adr/0011-native-session-archives.md) for the deferred native archive
-decision,
+[ADR 0013](adr/0013-native-archive-creation.md) for native creation and
+[ADR 0011](adr/0011-native-session-archives.md) for the earlier deferral and retained
+mixed-source restore decisions,
 [ADR 0008](adr/0008-immediate-session-deletion.md) for deletion, and
 [ADR 0010](adr/0010-terminal-restore-and-automatic-recovery.md) for terminal
 restore history and legacy worktree recovery, refined by

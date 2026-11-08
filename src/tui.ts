@@ -40,6 +40,8 @@ export default Plugin.define({
         return;
       }
       if (!pendingArchives.delete(event.data.operationID) && !viewing) return;
+      if (event.data.variant === 'success' && event.data.sessionIDs)
+        leaveTree(event.data.sessionIDs, false);
       context.ui.toast.show({
         title: 'Session archive',
         message: event.data.message,
@@ -147,7 +149,12 @@ export default Plugin.define({
       }
       // Do not use the TUI's default project or its possibly stale session cache here.
       const session = await context.client.session.get({ sessionID });
-      const { service, projectID } = await scoped(session.location);
+      const projectID = (
+        await context.client.location.get({ location: session.location })
+      ).project.id;
+      const service = new NativeSessionArchive(
+        gateway(context.client, lifetime.signal),
+      );
       const preview = await service.preview(sessionID);
       if (preview.projectID !== projectID) {
         throw new Error(
@@ -159,11 +166,11 @@ export default Plugin.define({
         before.type === 'session' &&
         preview.sessionIDs.includes(before.sessionID);
       lifetime.signal.throwIfAborted();
-      const saved = await service.archive(preview);
+      await service.archive(preview);
       leaveTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
         title: 'Session tree archived',
-        message: `${preview.sessionIDs.length} session(s). Archive: ${saved.id}\nServer file: ${saved.path}`,
+        message: `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${sessionID}.`,
         variant: 'success',
       });
     }
@@ -418,7 +425,7 @@ export default Plugin.define({
           id: 'simpod.session-archive.archive',
           title: 'Archive session tree',
           description:
-            'Save and verify the current session or a session ID, including descendants, then remove it',
+            'Archive the current session or a session ID natively, including descendants',
           group: 'Session archives',
           palette: true,
           run: (input) => operate(() => archive(input)),

@@ -10,7 +10,7 @@ function info(id: string, parentID?: string): SessionInfo {
     projectID: 'project-a',
     location: { directory: '/synthetic/project' },
     title: id,
-    metadata: { retained: 'private state' },
+    metadata: { retained: `${id} private state` },
     permissions: [{ action: 'shell', resource: '*', effect: 'deny' }],
     cost: 4,
     tokens: { input: 2, output: 3, reasoning: 1, cache: { read: 5, write: 6 } },
@@ -18,18 +18,35 @@ function info(id: string, parentID?: string): SessionInfo {
   };
 }
 
-function fixture() {
+function fixture(archived = true) {
   const state = new Map([
     ['ses_grandchild', info('ses_grandchild', 'ses_child')],
-    ['ses_root', info('ses_root')],
+    [
+      'ses_root',
+      {
+        ...info('ses_root'),
+        fork: {
+          sessionID: 'ses_source',
+          boundary: { type: 'through', messageID: 'msg_boundary' },
+        },
+      },
+    ],
     ['ses_other', info('ses_other')],
-    ['ses_child', { ...info('ses_child', 'ses_root'), projectID: 'project-b' }],
+    [
+      'ses_child',
+      {
+        ...info('ses_child', 'ses_root'),
+        projectID: 'project-b',
+        revert: { messageID: 'msg_reverted', snapshot: 'snapshot_retained' },
+      },
+    ],
   ]);
-  for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
-    const session = state.get(id);
-    assert(session);
-    session.time.archived = 100;
-  }
+  if (archived)
+    for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
+      const session = state.get(id);
+      assert(session);
+      session.time.archived = 100;
+    }
   const updates: Array<{ id: string; archived: boolean }> = [];
   let failID: string | undefined;
   let ignoreID: string | undefined;
@@ -74,16 +91,26 @@ function fixture() {
 
 const scope = { projectID: 'project-a', directory: '/synthetic/project' };
 
+test('native archive preserves the entire current family and archives the root last without changing unrelated sessions', async () => {
+  const f = fixture(false);
+  const expected = structuredClone(f.state);
+  for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
+    const session = expected.get(id);
+    assert(session);
+    session.time.archived = 100;
+  }
+  const preview = await f.service.preview('ses_root');
+  await f.service.archive(preview);
+  assert.deepEqual(f.updates, [
+    { id: 'ses_grandchild', archived: true },
+    { id: 'ses_child', archived: true },
+    { id: 'ses_root', archived: true },
+  ]);
+  assert.deepEqual(f.state, expected);
+});
+
 test('native descendant-ID restore preserves the entire current family without changing unrelated sessions', async () => {
   const f = fixture();
-  const root = f.state.get('ses_root');
-  const child = f.state.get('ses_child');
-  assert(root && child);
-  root.fork = {
-    sessionID: 'ses_source',
-    boundary: { type: 'through', messageID: 'msg_boundary' },
-  };
-  child.revert = { messageID: 'msg_reverted', snapshot: 'snapshot_retained' };
   const original = structuredClone(f.state);
   for (const id of ['ses_root', 'ses_child', 'ses_grandchild']) {
     const session = original.get(id);
@@ -165,6 +192,26 @@ test('descendant lookup selects the target archived group or an archived ancesto
         );
       },
     );
+});
+
+test('partial or unapplied native archive is not reported as complete and is never reversed automatically', async (t) => {
+  for (const mode of ['archive failure', 'unapplied update'])
+    await t.test(mode, async () => {
+      const f = fixture(false);
+      const expected = structuredClone(f.state);
+      const grandchild = expected.get('ses_grandchild');
+      assert(grandchild);
+      grandchild.time.archived = 100;
+      if (mode === 'unapplied update') f.ignore('ses_child');
+      else f.fail('ses_child');
+      const preview = await f.service.preview('ses_root');
+      await assert.rejects(
+        f.service.archive(preview),
+        /Native archive did not complete; 1 session\(s\) verified.*No sessions were deleted or imported/,
+      );
+      assert(f.updates.every((update) => update.archived === true));
+      assert.deepEqual(f.state, expected);
+    });
 });
 
 test('partial or unapplied native restore is not reported as complete and is never reversed automatically', async (t) => {

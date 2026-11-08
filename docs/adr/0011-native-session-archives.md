@@ -2,11 +2,16 @@
 
 ## Status
 
-Accepted. Implements the updated [session archive requirements](../session-archive.md).
-Retains [ADR 0001](0001-file-backed-transcript-archives.md)'s file-backed creation
-lifecycle while adding restore support for existing native archives. Does not
-authorize file migration. Desktop/TUI command ownership and permanent deletion
-are unchanged.
+Accepted, partially superseded by
+[ADR 0013](0013-native-archive-creation.md). The creation deferral, continued
+version-2 file creation, and archive result-form behavior below are historical,
+not current requirements. ADR 0013 adopts native creation and omits result forms
+when archiving the invoking tree. It retains this decision's mixed-source restore,
+file compatibility and recovery, and typed slash/palette feedback contracts.
+Selection presentation is refined by
+[ADR 0012](0012-popup-only-terminal-restore.md). File migration remains postponed;
+command ownership and permanent deletion are unchanged. See the current
+[session archive requirements](../session-archive.md).
 
 ## Context
 

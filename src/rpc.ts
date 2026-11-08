@@ -22,6 +22,7 @@ export const ArchiveResult = z.strictObject({
   sessionID: SessionID,
   variant: z.enum(['started', 'success', 'error']),
   message: z.string(),
+  sessionIDs: z.array(SessionID).min(1).optional(),
 });
 export type ArchiveResult = z.infer<typeof ArchiveResult>;
 

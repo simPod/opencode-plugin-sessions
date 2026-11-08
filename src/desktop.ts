@@ -239,12 +239,12 @@ export function desktopCommands(
     ),
     command(
       'session-archive',
-      'Save and verify a session tree, then remove it from OpenCode',
+      'Archive a session tree using native OpenCode archive state',
       async (host, sessionID, argument, operationID) => {
         const target = argument || sessionID;
         if (!SessionID.safeParse(target).success)
           throw new Error('Use /session-archive [sessionID].');
-        const service = new SessionArchive(host.sessions, storage, worktrees);
+        const service = new NativeSessionArchive(host.sessions);
         const preview = await service.preview(target);
         if (
           preview.projectID !== projectID ||
@@ -254,9 +254,9 @@ export function desktopCommands(
             'The session belongs to another project. Nothing was changed.',
           );
         signal.throwIfAborted();
-        const saved = await service.archive(preview);
-        const message = `${preview.sessionIDs.length} session(s) archived. Archive: ${saved.id}\nServer file: ${saved.path}`;
-        // Never attach a result form to a deleted session.
+        await service.archive(preview);
+        const message = `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${target}.`;
+        // Do not leave a result form pending on an archived tree.
         if (!preview.sessionIDs.includes(sessionID)) {
           try {
             await host.report(
@@ -266,7 +266,7 @@ export function desktopCommands(
             );
           } catch {
             throw new Error(
-              `The tree was archived, but the result could not be shown. Archive retained: ${saved.id}\nServer file: ${saved.path}`,
+              `The tree was archived, but the result could not be shown. Restore with /session-restore ${target}.`,
             );
           }
         }
@@ -276,10 +276,11 @@ export function desktopCommands(
             sessionID,
             variant: 'success',
             message,
+            sessionIDs: preview.sessionIDs,
           });
         } catch {
           throw new Error(
-            `The tree was archived, but TUI feedback could not be delivered. Archive retained: ${saved.id}\nServer file: ${saved.path}`,
+            `The tree was archived, but TUI feedback could not be delivered. Restore with /session-restore ${target}.`,
           );
         }
       },
