@@ -4,6 +4,7 @@ import type {
   SessionMessageInfo,
   SessionTransferData,
 } from '@opencode/client';
+import { projectScopes } from './project-scope.ts';
 
 export interface SessionGateway {
   get(id: string): Promise<SessionInfo>;
@@ -24,6 +25,7 @@ export function gateway(
   signal?: AbortSignal,
 ): SessionGateway {
   const options = signal ? { signal } : undefined;
+  const projects = projectScopes(client, signal);
   async function sessions(
     parentID?: string,
     archived?: boolean,
@@ -53,13 +55,7 @@ export function gateway(
 
   return {
     get: (sessionID) => client.session.get({ sessionID }, options),
-    resolveProject: async (directory) => {
-      // Cached location metadata can outlive a removed directory. Native file
-      // listing checks the server filesystem on every request, even if empty.
-      await client.file.list({ location: { directory } }, options);
-      return (await client.location.get({ location: { directory } }, options))
-        .project.id;
-    },
+    resolveProject: async (directory) => (await projects.resolve(directory)).id,
     children: (id) => sessions(id),
     existing: async () =>
       new Set((await sessions()).map((session) => session.id)),

@@ -20,6 +20,7 @@ import { SessionArchive } from './service.ts';
 import { restoreRecoveryMessage } from './worktree-recovery.ts';
 import type { WorktreeGateway } from './worktrees.ts';
 import type { ArchiveResult } from './rpc.ts';
+import { matchesProject } from './project-scope.ts';
 
 export function desktopCommands(
   connect: () => Promise<DesktopHost>,
@@ -68,7 +69,14 @@ export function desktopCommands(
               );
             const host = await connect();
             const session = await host.sessions.get(sessionID);
-            if (session.projectID !== projectID)
+            const belongs =
+              name === 'session-archive' || name === 'session-delete'
+                ? await matchesProject(host.projects, scope, {
+                    projectID: session.projectID,
+                    directory: session.location.directory,
+                  })
+                : session.projectID === projectID;
+            if (!belongs)
               throw new Error(
                 'The command belongs to another project. Nothing was changed.',
               );
@@ -246,10 +254,7 @@ export function desktopCommands(
           throw new Error('Use /session-archive [sessionID].');
         const service = new NativeSessionArchive(host.sessions);
         const preview = await service.preview(target);
-        if (
-          preview.projectID !== projectID ||
-          (projectID === 'global' && preview.directory !== scope.directory)
-        )
+        if (!(await matchesProject(host.projects, scope, preview)))
           throw new Error(
             'The session belongs to another project. Nothing was changed.',
           );
@@ -299,7 +304,7 @@ export function desktopCommands(
           throw new Error('Use /session-delete [sessionID].');
         const service = new SessionDelete(host.sessions);
         const preview = await service.preview(target);
-        if (preview.projectID !== projectID)
+        if (!(await matchesProject(host.projects, scope, preview)))
           throw new Error(
             'The session belongs to another project. Nothing was deleted.',
           );

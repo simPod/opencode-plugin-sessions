@@ -18,6 +18,7 @@ import { ArchiveID, SessionID, type ArchiveStorage } from './schema.ts';
 import { SessionArchive } from './service.ts';
 import { restoreRecoveryMessage } from './worktree-recovery.ts';
 import type { WorktreeGateway } from './worktrees.ts';
+import { matchesProject, projectScopes } from './project-scope.ts';
 
 export default Plugin.define({
   id: 'simpod-sessions-tui',
@@ -49,6 +50,7 @@ export default Plugin.define({
       });
     });
     const lifetime = new AbortController();
+    const projects = projectScopes(context.client, lifetime.signal);
     // Include archive selection in the guard. Never queue destructive UI actions.
     let running = false;
 
@@ -137,6 +139,19 @@ export default Plugin.define({
       };
     }
 
+    async function operationScope() {
+      const route = context.ui.router.current();
+      const location =
+        route.type === 'session'
+          ? (await context.client.session.get({ sessionID: route.sessionID }))
+              .location
+          : (context.location ?? context.data.location.default());
+      return {
+        projectID: (await projects.resolve(location.directory)).id,
+        directory: location.directory,
+      };
+    }
+
     async function archive(input?: string): Promise<void> {
       const argument = input?.trim();
       const route = context.ui.router.current();
@@ -147,18 +162,15 @@ export default Plugin.define({
           'Open a session or provide a valid session ID to archive.',
         );
       }
-      // Do not use the TUI's default project or its possibly stale session cache here.
-      const session = await context.client.session.get({ sessionID });
-      const projectID = (
-        await context.client.location.get({ location: session.location })
-      ).project.id;
+      // Resolve the invoking location live, not the TUI's default project cache.
+      const scope = await operationScope();
       const service = new NativeSessionArchive(
         gateway(context.client, lifetime.signal),
       );
       const preview = await service.preview(sessionID);
-      if (preview.projectID !== projectID) {
+      if (!(await matchesProject(projects, scope, preview))) {
         throw new Error(
-          'The session location does not match its project. Nothing was changed.',
+          'The session belongs to another project. Nothing was changed.',
         );
       }
       const before = context.ui.router.current();
@@ -202,6 +214,11 @@ export default Plugin.define({
         );
       const service = new SessionDelete(gateway(context.client, lifetime.signal));
       const preview = await service.preview(sessionID);
+      const scope = await operationScope();
+      if (!(await matchesProject(projects, scope, preview)))
+        throw new Error(
+          'The session belongs to another project. Nothing was deleted.',
+        );
       lifetime.signal.throwIfAborted();
       const before = context.ui.router.current();
       const viewingTree =

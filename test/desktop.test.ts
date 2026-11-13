@@ -21,6 +21,7 @@ import {
 } from '../src/schema.ts';
 import type { WorktreeGateway } from '../src/worktrees.ts';
 import type { ArchiveResult } from '../src/rpc.ts';
+import type { ProjectScopes } from '../src/project-scope.ts';
 
 const archiveID = randomUUID();
 function transfer(id: string, projectID = 'project-a'): SessionTransferData {
@@ -57,6 +58,16 @@ function fixture(
   const state = new Map<string, SessionTransferData>([
     ['ses_owner', transfer('ses_owner')],
     ['ses_target', transfer('ses_target')],
+  ]);
+  const projects: Awaited<ReturnType<ProjectScopes['list']>> = [
+    { id: 'project-a', canonical: '/synthetic/project', vcs: 'git' },
+    { id: 'project-alias', canonical: '/synthetic/project', vcs: 'git' },
+    { id: 'project-b', canonical: '/synthetic/foreign', vcs: 'git' },
+  ];
+  const locations = new Map([
+    ['/synthetic/project', { id: 'project-a', canonical: '/synthetic/project' }],
+    ['/synthetic/worktree', { id: 'project-a', canonical: '/synthetic/project' }],
+    ['/synthetic/foreign', { id: 'project-b', canonical: '/synthetic/foreign' }],
   ]);
   const bundles = new Map<string, ArchiveBundle>();
   const questions: Array<{
@@ -130,6 +141,16 @@ function fixture(
     },
   };
   const host: DesktopHost = {
+    projects: {
+      async list() {
+        return structuredClone(projects);
+      },
+      async resolve(directory) {
+        const project = locations.get(directory);
+        assert(project, `Unknown location: ${directory}`);
+        return structuredClone(project);
+      },
+    },
     sessions: {
       async resolveProject() {
         return 'project-a';
@@ -267,6 +288,8 @@ function fixture(
     recovery,
     abort,
     sessions: host.sessions,
+    projects,
+    locations,
     archived,
     onAnswer(callback: () => void) {
       beforeAnswer = callback;
@@ -425,25 +448,73 @@ test('slash archive result failures state native completion and the restore comm
     });
 });
 
-test('slash archive rejects roots outside its project or global directory before any write', async (t) => {
-  for (const projectID of ['project-a', 'global'])
-    await t.test(projectID, async () => {
-      const f = fixture([], { projectID, directory: '/synthetic/project' });
-      f.state.set('ses_owner', transfer('ses_owner', projectID));
-      const foreign = transfer(
-        'ses_foreign',
-        projectID === 'global' ? 'global' : 'project-b',
-      );
-      foreign.info.location.directory = '/synthetic/other';
-      f.state.set('ses_foreign', foreign);
-      const original = structuredClone(f.state);
-      await assert.rejects(
-        f.run('session-archive', 'ses_foreign'),
-        /another (project|directory)/,
-      );
-      assert.deepEqual(f.state, original);
-      assert.deepEqual(f.events, []);
-    });
+test('archive and delete accept same-repository aliases for the invoking session and target', async (t) => {
+  for (const command of ['session-archive', 'session-delete'])
+    for (const target of ['ses_owner', 'ses_target'])
+      await t.test(`${command}: ${target}`, async () => {
+        const f = fixture();
+        f.state.set('ses_owner', transfer('ses_owner', 'project-alias'));
+        f.state.set('ses_target', transfer('ses_target', 'project-alias'));
+        const other = f.state.get('ses_target');
+        assert(other);
+        other.info.location.directory = '/synthetic/worktree';
+        await f.run(command, target);
+        if (command === 'session-archive')
+          assert.deepEqual(f.events, [`archive:${target}`]);
+        else {
+          assert.deepEqual(f.events, ['remove']);
+          assert(!f.state.has(target));
+        }
+      });
+});
+
+test('archive and delete reject roots outside their project or global directory before any write', async (t) => {
+  for (const command of ['session-archive', 'session-delete'])
+    for (const projectID of ['project-a', 'global'])
+      await t.test(`${command}: ${projectID}`, async () => {
+        const f = fixture([], { projectID, directory: '/synthetic/project' });
+        f.state.set('ses_owner', transfer('ses_owner', projectID));
+        const foreign = transfer(
+          'ses_foreign',
+          projectID === 'global' ? 'global' : 'project-b',
+        );
+        foreign.info.location.directory = '/synthetic/other';
+        f.state.set('ses_foreign', foreign);
+        const original = structuredClone(f.state);
+        await assert.rejects(
+          f.run(command, 'ses_foreign'),
+          /another (project|directory)/,
+        );
+        assert.deepEqual(f.state, original);
+        assert.deepEqual(f.events, []);
+      });
+});
+
+test('archive and delete require known Git aliases and matching live locations', async (t) => {
+  for (const command of ['session-archive', 'session-delete'])
+    for (const failure of ['unknown', 'non-git', 'moved', 'missing', 'invoker'])
+      await t.test(`${command}: ${failure}`, async () => {
+        const f = fixture();
+        const target = transfer('ses_target', 'project-alias');
+        target.info.location.directory = '/synthetic/worktree';
+        f.state.set('ses_target', target);
+        const alias = f.projects.find((project) => project.id === 'project-alias');
+        assert(alias);
+        if (failure === 'unknown') alias.id = 'unknown-project';
+        if (failure === 'non-git') delete alias.vcs;
+        if (failure === 'moved')
+          f.locations.set('/synthetic/worktree', {
+            id: 'project-b',
+            canonical: '/synthetic/foreign',
+          });
+        if (failure === 'missing') f.locations.delete('/synthetic/worktree');
+        if (failure === 'invoker')
+          f.state.set('ses_owner', transfer('ses_owner', 'project-b'));
+        const original = structuredClone(f.state);
+        await assert.rejects(f.run(command, 'ses_target'));
+        assert.deepEqual(f.state, original);
+        assert.deepEqual(f.events, []);
+      });
 });
 
 test('desktop descendant lookup offers both native and legacy archives but excludes foreign native roots', async () => {
@@ -519,11 +590,6 @@ test('desktop delete invalid input makes no changes', async () => {
     assert.deepEqual(f.questions, []);
     assert.deepEqual(f.events, []);
   }
-  const f = fixture();
-  f.state.set('ses_foreign', transfer('ses_foreign', 'project-b'));
-  await assert.rejects(f.run('session-delete', 'ses_foreign'), /another project/);
-  assert.deepEqual(f.questions, []);
-  assert.deepEqual(f.events, []);
 });
 
 test('desktop delete rechecks the captured tree and plugin lifetime before deletion', async (t) => {

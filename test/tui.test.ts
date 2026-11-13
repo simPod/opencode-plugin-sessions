@@ -83,7 +83,28 @@ async function scenario(pluginURL: string) {
     location,
     client: {
       file: { list: async () => ({ location, data: [] }) },
-      location: { get: async () => ({ project: { id: 'test-project' } }) },
+      location: {
+        get: async ({ location }: { location: LocationRef }) => ({
+          project: {
+            id:
+              location.directory === '/synthetic/foreign'
+                ? 'foreign-project'
+                : 'test-project',
+            canonical:
+              location.directory === '/synthetic/foreign'
+                ? '/synthetic/foreign'
+                : '/synthetic/project',
+          },
+        }),
+      },
+      project: {
+        list: async () => [
+          { id: 'test-project', canonical: '/synthetic/project', vcs: 'git' },
+          { id: 'project-alias', canonical: '/synthetic/project', vcs: 'git' },
+          { id: 'foreign-project', canonical: '/synthetic/foreign', vcs: 'git' },
+          { id: 'unrelated-project', canonical: '/synthetic/foreign', vcs: 'git' },
+        ],
+      },
       rpc: () => ({
         events: { on: () => () => {} },
         restoreMappings: async () => [
@@ -257,7 +278,7 @@ async function scenario(pluginURL: string) {
   const unrelated = structuredClone(original);
   unrelated.info.id = 'ses_other';
   state.set('ses_other', unrelated);
-  route = { type: 'session', sessionID: 'ses_child' };
+  route = { type: 'session', sessionID: 'ses_test' };
   const expectedRestoredState = structuredClone(state);
   // Existing files remain untouched; new archives only update native flags.
   bundles.set(savedID, {
@@ -454,6 +475,7 @@ async function scenario(pluginURL: string) {
     child.info.id = 'ses_child';
     child.info.parentID = 'ses_test';
     child.info.projectID = 'foreign-project';
+    child.info.location.directory = '/synthetic/foreign';
     state.set('ses_child', child);
     const unrelated = structuredClone(original);
     unrelated.info.id = 'ses_other';
@@ -467,7 +489,12 @@ async function scenario(pluginURL: string) {
     );
     const initialRoute = {
       type: 'session' as const,
-      sessionID: outcome === 'delete-by-id' ? 'ses_other' : 'ses_child',
+      sessionID:
+        outcome === 'delete-by-id'
+          ? 'ses_other'
+          : outcome === 'delete-current'
+            ? 'ses_child'
+            : 'ses_test',
     };
     route = initialRoute;
     let reads = 0;
@@ -516,6 +543,37 @@ async function scenario(pluginURL: string) {
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
   await remove.run('invalid');
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
+
+  // The palette uses the same alias check as slash commands, not the cached
+  // project ID or the target's own project as the command's scope.
+  for (const action of [archive, remove])
+    for (const allowed of [true, false]) {
+      state.clear();
+      state.set('ses_test', structuredClone(original));
+      const target = structuredClone(original);
+      target.info.id = 'ses_target';
+      target.info.projectID = allowed ? 'project-alias' : 'unrelated-project';
+      target.info.location.directory = allowed
+        ? '/synthetic/worktree'
+        : '/synthetic/foreign';
+      state.set('ses_target', target);
+      route = { type: 'session', sessionID: 'ses_test' };
+      const beforeUpdates = updates.length;
+      const beforeRemovals: number = removals;
+      const before = structuredClone(state);
+      await action.run('ses_target');
+      if (allowed) {
+        assert.equal(toasts.at(-1)?.variant, 'success');
+        if (action === archive)
+          assert.equal(session('ses_target').info.time.archived, 4);
+        else assert(!state.has('ses_target'));
+      } else {
+        assert.match(toasts.at(-1)?.message ?? '', /another project/);
+        assert.deepEqual(state, before);
+        assert.equal(updates.length, beforeUpdates);
+        assert.equal(removals, beforeRemovals);
+      }
+    }
 
   state.set('ses_test', structuredClone(original));
   const pendingChild = structuredClone(original);

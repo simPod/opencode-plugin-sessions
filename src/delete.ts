@@ -5,6 +5,7 @@ import { SessionID } from './schema.ts';
 export interface DeletePreview {
   rootSessionID: string;
   projectID: string;
+  directory: string;
   sessionIDs: string[];
   fingerprint: string;
 }
@@ -36,6 +37,7 @@ export class SessionDelete {
     return {
       rootSessionID,
       projectID: root.projectID,
+      directory: root.location.directory,
       sessionIDs: family.map((session) => session.id),
       // Deletion does not preserve transcripts. Recheck tree identity rather
       // than blocking deletion when active work changes the transcript.

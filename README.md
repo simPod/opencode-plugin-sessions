@@ -33,9 +33,16 @@ to a model:
   supplied ID, and its descendants immediately, without confirmation. No archive
   is saved. Active work is stopped. Existing archive files are not changed.
 
-Native archive creation includes descendants from other projects. Creation and
-native restore require the root to belong to the current project; the shared
-non-Git `global` project also requires the exact current directory. Native
+Native archive creation includes descendants from other projects. Archive and
+delete require the root to belong to the current project. Different project IDs
+are accepted only when both are registered Git projects with the same canonical
+repository and both readable server directories resolve to that repository.
+Unknown aliases, unrelated repositories, and non-Git aliases are refused. The
+shared non-Git `global` project requires the exact current directory.
+
+Native restore still requires the archived root's exact project ID; alias
+matching does not change restore discovery or eligibility. An archive stored
+under an old project ID can require the native session API to restore. Native
 archives are grouped under their highest archived ancestor. Session-ID lookup
 restores that family, not only the supplied descendant. File lookup retains
 explicitly mapped sources and saved descendant IDs. One match restores

@@ -9,9 +9,11 @@ import {
 import { Service } from '@opencode/client/service';
 import { gateway, type SessionGateway } from './gateway.ts';
 import { Archives } from './rpc.ts';
+import { projectScopes, type ProjectScopes } from './project-scope.ts';
 
 export interface DesktopHost {
   sessions: SessionGateway;
+  projects: ProjectScopes;
   ask(
     sessionID: string,
     title: string,
@@ -57,6 +59,7 @@ export async function desktopClient(
 
   return {
     sessions: gateway(client, signal),
+    projects: projectScopes(client, signal),
     async ask(sessionID, title, fields, metadata) {
       const form = await client.session.form.create(
         {

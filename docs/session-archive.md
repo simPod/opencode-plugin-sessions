@@ -90,6 +90,15 @@ root-project scope and exact-directory scope for the shared non-Git `global`
 project. Use the public session update API with `archived: true` for each session,
 descendants before the root, and read back each flag to verify the update.
 
+Archive and delete share project matching in both slash and TUI palette paths.
+Different root or invoking-session project IDs are allowed only when both known
+projects are Git projects with the same canonical repository. Check that both
+server directories remain readable and resolve to that canonical repository;
+cached location metadata alone is insufficient. Reject unknown IDs, non-Git
+aliases, and unrelated repositories. Preserve exact-directory scope for `global`.
+This does not change restore lookup or eligibility, which still uses exact
+project IDs and may require the native API to restore an aliased archive.
+
 Preserve session IDs, transcripts, parent links, fork/revert state, workspace
 identity, and other runtime fields in place. Do not export, delete, import, or
 write JSON files. Do not require settled snapshots or reject active sessions
