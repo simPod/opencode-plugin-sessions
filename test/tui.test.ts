@@ -64,6 +64,7 @@ async function scenario(pluginURL: string) {
   let beforeRead: (() => void) | undefined;
   let selectionGate: Promise<void> | undefined;
   let beforeSessionGet: ((sessionID: string) => void) | undefined;
+  let showHomeOnDelete = false;
   const tabs: Array<{ sessionID: string }> = [];
   let imports = 0;
   let removals = 0;
@@ -191,6 +192,12 @@ async function scenario(pluginURL: string) {
               if (item.info.parentID === parentID) pending.push(item.info.id);
             state.delete(parentID);
           }
+          if (
+            showHomeOnDelete &&
+            route.type === 'session' &&
+            pending.includes(route.sessionID)
+          )
+            route = { type: 'home' };
         },
         import: async (data: SessionTransferData) => {
           imports++;
@@ -225,6 +232,11 @@ async function scenario(pluginURL: string) {
         enabled: () => tabs.length > 0,
         open: () => {},
         list: () => [...tabs],
+        focus: (sessionID: string) => {
+          assert(tabs.some((tab) => tab.sessionID === sessionID));
+          route = { type: 'session', sessionID };
+          return true;
+        },
         close: (sessionID: string) => {
           const index = tabs.findIndex((tab) => tab.sessionID === sessionID);
           if (index !== -1) tabs.splice(index, 1);
@@ -456,6 +468,7 @@ async function scenario(pluginURL: string) {
     'delete-current',
     'delete-tree',
     'delete-by-id',
+    'delete-last-tab',
   ]) {
     state.clear();
     state.set('ses_test', structuredClone(original));
@@ -473,7 +486,7 @@ async function scenario(pluginURL: string) {
       tabs.length,
       { sessionID: 'ses_test' },
       { sessionID: 'ses_child' },
-      { sessionID: 'ses_other' },
+      ...(outcome === 'delete-last-tab' ? [] : [{ sessionID: 'ses_other' }]),
     );
     const initialRoute = {
       type: 'session' as const,
@@ -497,27 +510,35 @@ async function scenario(pluginURL: string) {
         : undefined;
     // A delete without arguments can target an open child without deleting its parent.
     const argument = outcome === 'delete-current' ? undefined : 'ses_test';
+    // OpenCode can already be on Home when the delete request returns.
+    showHomeOnDelete = outcome === 'delete-tree';
     session(initialRoute.sessionID).info.model = {
       providerID: 'saved-provider',
       id: 'saved-model',
       variant: 'high',
     };
     await remove.run(argument);
-    if (
-      outcome === 'delete-current' ||
-      outcome === 'delete-tree' ||
-      outcome === 'delete-by-id'
-    ) {
+    if (outcome !== 'changed') {
       assert(!state.has('ses_child'));
       assert.equal(state.has('ses_test'), outcome === 'delete-current');
       assert(state.has('ses_other'));
       assert.deepEqual(
         route,
-        outcome === 'delete-by-id' ? initialRoute : { type: 'home' },
+        outcome === 'delete-last-tab'
+          ? { type: 'home' }
+          : {
+              type: 'session',
+              sessionID:
+                outcome === 'delete-current' ? 'ses_test' : 'ses_other',
+            },
       );
       assert.deepEqual(
         tabs.map((tab) => tab.sessionID),
-        outcome === 'delete-current' ? ['ses_test', 'ses_other'] : ['ses_other'],
+        outcome === 'delete-last-tab'
+          ? []
+          : outcome === 'delete-current'
+            ? ['ses_test', 'ses_other']
+            : ['ses_other'],
       );
       assert.equal(toasts.at(-1)?.title, 'Session tree deleted');
       assert.equal(toasts.at(-1)?.variant, 'success');
@@ -531,6 +552,7 @@ async function scenario(pluginURL: string) {
     assert.deepEqual(bundles, retainedArchives);
   }
   beforeSessionGet = undefined;
+  showHomeOnDelete = false;
   route = { type: 'home' };
   await remove.run();
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
@@ -625,6 +647,11 @@ async function slashArchiveScenario(pluginURL: string) {
       tabs: {
         enabled: () => true,
         list: () => tabs.map((sessionID) => ({ sessionID })),
+        focus: (sessionID: string) => {
+          assert(tabs.includes(sessionID));
+          route = { type: 'session', sessionID };
+          return true;
+        },
         close: (sessionID: string) => {
           const index = tabs.indexOf(sessionID);
           if (index !== -1) tabs.splice(index, 1);
@@ -656,10 +683,10 @@ async function slashArchiveScenario(pluginURL: string) {
   emit(started);
   assert.equal(toasts.at(-1)?.variant, 'info');
   // Native archive emits no deletion event. Exact IDs must close the current
-  // archived descendant and all archived tabs, without closing unrelated tabs.
+  // archived descendant and all archived tabs, then keep the unrelated tab.
   route = { type: 'session', sessionID: 'ses_child' };
   emit(success);
-  assert.deepEqual(route, { type: 'home' });
+  assert.deepEqual(route, { type: 'session', sessionID: 'ses_other' });
   assert.deepEqual(tabs, ['ses_other']);
 
   // A correlated success must not leave an unrelated session the user opened.

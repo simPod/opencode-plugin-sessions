@@ -153,19 +153,21 @@ export default Plugin.define({
     }
 
     function leaveTree(sessionIDs: string[], viewingTree: boolean): void {
-      // Navigate before tab cleanup so it cannot focus another removed tree member.
+      const removed = new Set(sessionIDs);
+      const tabs = context.ui.tabs.enabled() ? context.ui.tabs.list() : [];
       const current = context.ui.router.current();
       if (
-        viewingTree ||
-        (current.type === 'session' && sessionIDs.includes(current.sessionID))
+        (current.type === 'session' && removed.has(current.sessionID)) ||
+        (current.type === 'home' && viewingTree)
       ) {
-        context.ui.router.navigate({ type: 'home' });
+        // Select a surviving tab before closing any tabs from the removed tree.
+        const next = tabs.find((tab) => !removed.has(tab.sessionID));
+        if (next) context.ui.tabs.focus(next.sessionID);
+        else if (current.type !== 'home')
+          context.ui.router.navigate({ type: 'home' });
       }
-      if (context.ui.tabs.enabled()) {
-        const removed = new Set(sessionIDs);
-        for (const tab of context.ui.tabs.list()) {
-          if (removed.has(tab.sessionID)) context.ui.tabs.close(tab.sessionID);
-        }
+      for (const tab of tabs) {
+        if (removed.has(tab.sessionID)) context.ui.tabs.close(tab.sessionID);
       }
     }
 
