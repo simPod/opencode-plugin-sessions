@@ -3,11 +3,7 @@ import { Plugin } from '@opencode/plugin/tui';
 import { SessionDelete } from './delete.ts';
 import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
-import {
-  NativeSessionArchive,
-  archiveResultMessage,
-  restoreArchives,
-} from './native-archive.ts';
+import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
 import { Archives } from './rpc.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -154,45 +150,6 @@ export default Plugin.define({
         projectID: (await projects.resolve(location.directory)).id,
         directory: location.directory,
       };
-    }
-
-    async function archive(input?: string): Promise<void> {
-      const argument = input?.trim();
-      const route = context.ui.router.current();
-      const sessionID =
-        argument || (route.type === 'session' ? route.sessionID : undefined);
-      if (!sessionID || !SessionID.safeParse(sessionID).success) {
-        throw new Error(
-          'Open a session or provide a valid session ID to archive.',
-        );
-      }
-      // Resolve the invoking location live, not the TUI's default project cache.
-      const scope = await operationScope();
-      const service = new NativeSessionArchive(
-        gateway(context.client, lifetime.signal),
-      );
-      const preview = await service.preview(sessionID);
-      if (!(await matchesProject(projects, scope, preview))) {
-        throw new Error(
-          'The session belongs to another project. Nothing was changed.',
-        );
-      }
-      const before = context.ui.router.current();
-      const viewingTree =
-        before.type === 'session' &&
-        preview.sessionIDs.includes(before.sessionID);
-      lifetime.signal.throwIfAborted();
-      await service.archive(preview);
-      leaveTree(preview.sessionIDs, viewingTree);
-      context.ui.toast.show({
-        title: 'Session tree archived',
-        message: await archiveResultMessage(
-          preview,
-          context.client.model,
-          lifetime.signal,
-        ),
-        variant: 'success',
-      });
     }
 
     function leaveTree(sessionIDs: string[], viewingTree: boolean): void {
@@ -441,20 +398,9 @@ export default Plugin.define({
       });
     });
 
-    // Local slash names are distinct from server names because OpenCode lists both.
     context.keymap.layer(() => ({
       mode: 'global',
       commands: [
-        {
-          id: 'simpod.session-archive.archive',
-          title: 'Archive session tree',
-          description:
-            'Archive the current session or a session ID natively, including descendants',
-          group: 'Session archives',
-          palette: true,
-          slash: { name: 'archive-session', arguments: true },
-          run: (input) => operate(() => archive(input)),
-        },
         {
           id: 'simpod.session-archive.restore',
           title: 'Restore session archive',

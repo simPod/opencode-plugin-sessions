@@ -54,7 +54,6 @@ async function scenario(pluginURL: string) {
   let commands: Layer['commands'];
   const selections: Array<readonly { value: string }[]> = [];
   const lookups: Array<{ sessionID?: string }> = [];
-  const modelLocations: Array<string | undefined> = [];
   let route: ReturnType<Plugin.Context['ui']['router']['current']> = {
     type: 'session',
     sessionID: 'ses_test',
@@ -68,7 +67,6 @@ async function scenario(pluginURL: string) {
   const tabs: Array<{ sessionID: string }> = [];
   let imports = 0;
   let removals = 0;
-  const updates: Array<{ sessionID: string; archived: boolean }> = [];
   function session(id: string) {
     const item = state.get(id);
     assert(item);
@@ -99,10 +97,7 @@ async function scenario(pluginURL: string) {
         }),
       },
       model: {
-        async list(input) {
-          modelLocations.push(input?.location?.directory);
-          return { location: { directory: '/synthetic/worktree' }, data: [] };
-        },
+        list: async () => assert.fail('Terminal actions must not check models'),
       } satisfies Pick<Plugin.Context['client']['model'], 'list'>,
       project: {
         list: async () => [
@@ -149,7 +144,7 @@ async function scenario(pluginURL: string) {
           beforeRead?.();
           return structuredClone(bundle(id));
         },
-        save: async () => assert.fail('Native archive must not save through RPC'),
+        save: async () => assert.fail('Restore and delete must not save archives'),
         worktreeCapture: async () => [],
         worktreeMissing: async () => [],
       }),
@@ -182,14 +177,12 @@ async function scenario(pluginURL: string) {
           sessionID: string;
           archived: boolean;
         }) => {
-          updates.push({ sessionID, archived });
-          const info = session(sessionID).info;
-          if (archived) info.time.archived = 4;
-          else delete info.time.archived;
+          assert.equal(archived, false, 'The terminal must only clear archive flags');
+          delete session(sessionID).info.time.archived;
         },
         active: async () => ({}),
         inbox: { list: async () => [] },
-        export: async () => assert.fail('Native archive must not export'),
+        export: async () => assert.fail('Restore and delete must not export'),
         remove: async ({ sessionID }: { sessionID: string }) => {
           removals++;
           const pending = [sessionID];
@@ -253,8 +246,14 @@ async function scenario(pluginURL: string) {
   const cleanup = await plugin.setup(context as unknown as Plugin.Context);
   assert(typeof cleanup === 'function');
   assert(commands);
-  const archive = commands.find(
-    (command) => command.id === 'simpod.session-archive.archive',
+  assert(
+    !commands.some(
+      (command) =>
+        command.id === 'simpod.session-archive.archive' ||
+        command.slash?.name === 'archive-session' ||
+        command.slash?.name === 'session-archive',
+    ),
+    'The terminal must not register a local archive action',
   );
   const restore = commands.find(
     (command) => command.id === 'simpod.session-archive.restore',
@@ -262,13 +261,10 @@ async function scenario(pluginURL: string) {
   const remove = commands.find(
     (command) => command.id === 'simpod.session-archive.delete',
   );
-  assert(archive);
   assert(restore);
   assert(remove);
-  assert(archive.palette);
   assert(restore.palette);
   assert(remove.palette);
-  assert.deepEqual(archive.slash, { name: 'archive-session', arguments: true });
   assert.equal(restore.slash, undefined);
   assert.deepEqual(remove.slash, { name: 'session-delete', arguments: true });
   assert.deepEqual(
@@ -288,7 +284,6 @@ async function scenario(pluginURL: string) {
   const unrelated = structuredClone(original);
   unrelated.info.id = 'ses_other';
   state.set('ses_other', unrelated);
-  route = { type: 'session', sessionID: 'ses_test' };
   session('ses_test').info.location.directory = '/synthetic/worktree';
   session('ses_test').info.model = {
     providerID: 'saved-provider',
@@ -296,7 +291,9 @@ async function scenario(pluginURL: string) {
     variant: 'high',
   };
   const expectedRestoredState = structuredClone(state);
-  // Existing files remain untouched; new archives only update native flags.
+  session('ses_test').info.time.archived = 4;
+  session('ses_child').info.time.archived = 4;
+  // Existing files remain untouched when restoring a native archive.
   bundles.set(savedID, {
     format: 'opencode-session-archive',
     version: 1,
@@ -307,37 +304,7 @@ async function scenario(pluginURL: string) {
     sessions: [structuredClone(original)],
   });
   const legacyArchives = structuredClone(bundles);
-  tabs.push(
-    { sessionID: 'ses_test' },
-    { sessionID: 'ses_child' },
-    { sessionID: 'ses_other' },
-  );
-  const beforeArchiveToasts = toasts.length;
-  await archive.run('ses_test');
-  const expectedArchivedState = structuredClone(expectedRestoredState);
-  for (const id of ['ses_test', 'ses_child']) {
-    const item = expectedArchivedState.get(id);
-    assert(item);
-    item.info.time.archived = 4;
-  }
-  assert.deepEqual(state, expectedArchivedState);
-  assert.deepEqual(updates, [
-    { sessionID: 'ses_child', archived: true },
-    { sessionID: 'ses_test', archived: true },
-  ]);
-  assert.deepEqual(bundles, legacyArchives);
-  assert.deepEqual(route, { type: 'home' });
-  assert.deepEqual(tabs, [{ sessionID: 'ses_other' }]);
-  assert.equal(toasts.length, beforeArchiveToasts + 1);
-  assert.equal(toasts.at(-1)?.variant, 'success');
-  assert.match(toasts.at(-1)?.message ?? '', /archived natively/i);
-  assert.match(toasts.at(-1)?.message ?? '', /\/session-restore ses_test/);
-  assert.match(
-    toasts.at(-1)?.message ?? '',
-    /saved-provider\/saved-model is unavailable/,
-  );
-  assert.deepEqual(modelLocations, ['/synthetic/worktree']);
-  assert.doesNotMatch(toasts.at(-1)?.message ?? '', /Server file|backup/i);
+  route = { type: 'home' };
   await restore.run('ses_child');
   assert.deepEqual(state, expectedRestoredState);
   assert.deepEqual(route, { type: 'session', sessionID: 'ses_test' });
@@ -535,9 +502,7 @@ async function scenario(pluginURL: string) {
       id: 'saved-model',
       variant: 'high',
     };
-    const beforeModelLookups: number = modelLocations.length;
     await remove.run(argument);
-    assert.equal(modelLocations.length, beforeModelLookups);
     if (
       outcome === 'delete-current' ||
       outcome === 'delete-tree' ||
@@ -572,36 +537,30 @@ async function scenario(pluginURL: string) {
   await remove.run('invalid');
   assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
 
-  // The palette uses the same alias check as slash commands, not the cached
-  // project ID or the target's own project as the command's scope.
-  for (const action of [archive, remove])
-    for (const allowed of [true, false]) {
-      state.clear();
-      state.set('ses_test', structuredClone(original));
-      const target = structuredClone(original);
-      target.info.id = 'ses_target';
-      target.info.projectID = allowed ? 'project-alias' : 'unrelated-project';
-      target.info.location.directory = allowed
-        ? '/synthetic/worktree'
-        : '/synthetic/foreign';
-      state.set('ses_target', target);
-      route = { type: 'session', sessionID: 'ses_test' };
-      const beforeUpdates = updates.length;
-      const beforeRemovals: number = removals;
-      const before = structuredClone(state);
-      await action.run('ses_target');
-      if (allowed) {
-        assert.equal(toasts.at(-1)?.variant, 'success');
-        if (action === archive)
-          assert.equal(session('ses_target').info.time.archived, 4);
-        else assert(!state.has('ses_target'));
-      } else {
-        assert.match(toasts.at(-1)?.message ?? '', /another project/);
-        assert.deepEqual(state, before);
-        assert.equal(updates.length, beforeUpdates);
-        assert.equal(removals, beforeRemovals);
-      }
+  // Delete checks the invoking project's scope, not the target's own project.
+  for (const allowed of [true, false]) {
+    state.clear();
+    state.set('ses_test', structuredClone(original));
+    const target = structuredClone(original);
+    target.info.id = 'ses_target';
+    target.info.projectID = allowed ? 'project-alias' : 'unrelated-project';
+    target.info.location.directory = allowed
+      ? '/synthetic/worktree'
+      : '/synthetic/foreign';
+    state.set('ses_target', target);
+    route = { type: 'session', sessionID: 'ses_test' };
+    const beforeRemovals: number = removals;
+    const before = structuredClone(state);
+    await remove.run('ses_target');
+    if (allowed) {
+      assert.equal(toasts.at(-1)?.variant, 'success');
+      assert(!state.has('ses_target'));
+    } else {
+      assert.match(toasts.at(-1)?.message ?? '', /another project/);
+      assert.deepEqual(state, before);
+      assert.equal(removals, beforeRemovals);
     }
+  }
 
   state.set('ses_test', structuredClone(original));
   const pendingChild = structuredClone(original);
@@ -610,24 +569,19 @@ async function scenario(pluginURL: string) {
   state.set('ses_child', pendingChild);
   beforeSessionGet = () => cleanup();
   const beforeUnload = structuredClone(state);
-  await archive.run('ses_test');
-  assert.deepEqual(state, beforeUnload);
   await remove.run('ses_test');
-  assert(state.has('ses_test'));
-  assert(state.has('ses_child'));
+  assert.deepEqual(state, beforeUnload);
   assert.equal(toasts.at(-1)?.variant, 'error');
   assert.match(toasts.at(-1)?.message ?? '', /aborted/i);
-  console.log('Archive, restore, and delete completed without confirmation.');
 }
 
-test('model-free terminal slash and palette actions act on the correct session tree', async () => {
+test('the terminal leaves archive creation to the server and retains local restore and delete', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
-  const result = await execute(
+  await execute(
     process.execPath,
     ['--experimental-strip-types', '--input-type=module', '-e', script],
     { timeout: 5_000 },
   );
-  assert.match(result.stdout, /completed without confirmation/);
 });
 
 async function slashArchiveScenario(pluginURL: string) {

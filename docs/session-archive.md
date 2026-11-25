@@ -26,9 +26,14 @@ Archive, restore, and delete run immediately without confirmation and cannot be
 queued. Without an ID, archive and delete use the open session; restore opens a
 picker. Selecting a row restores it immediately; cancellation makes no changes.
 
-The TUI exposes `/archive-session [session-id]` and `/session-delete [session-id]`
-through its palette handlers. These commands bypass the terminal model check.
+Register archive creation only as the server's `/session-archive` command. Do
+not register a terminal-local slash command or palette action, and do not patch
+OpenCode's terminal model check. A terminal with an unavailable selected model
+can reject the server command before dispatch. See
+[ADR 0016](adr/0016-server-only-archive-creation.md).
+
 Register delete only in the terminal, under `/session-delete`, without aliases.
+It uses the same handler as the terminal palette and bypasses the model check.
 Desktop keeps its built-in Delete action. Retain the permanent-delete warning.
 See [ADR 0015](adr/0015-single-terminal-delete-command.md).
 
@@ -63,13 +68,11 @@ Keep unrelated result events ignored. Show start and result toasts and unsubscri
 on TUI unload. Do not intercept generic native archive events for this cleanup.
 These events are not replayed; disconnected
 clients can miss them. Continue throwing errors through the normal command path.
-Palette archive keeps its own toast without also publishing slash feedback.
 Desktop retains result forms for invoking sessions outside the archived tree;
 archiving the invoking tree must not create a pending result form. Never attach
 a result form to a deleted session. Other slash results retain native panels.
-Successful slash and palette archive return home when viewing the archived tree
-and close only its tabs. Palette archive uses the same existing cleanup with the
-exact archived IDs. Palette delete retains its existing departure and tab cleanup.
+Successful archive returns home when viewing the archived tree and closes only
+its tabs. Palette delete retains its existing departure and tab cleanup.
 Desktop restore does not automatically open a session.
 
 Server slash commands require the host's managed-service registration and verify
@@ -86,14 +89,13 @@ form-cache or renderer patches to hide forms.
 
 ## Native archive creation
 
-Use native creation for both slash and TUI palette archive actions. Preview the
+Use native creation for the server archive command. Preview the
 selected root and current descendants, including cross-project descendants. Keep
 root-project scope and exact-directory scope for the shared non-Git `global`
 project. Use the public session update API with `archived: true` for each session,
 descendants before the root, and read back each flag to verify the update.
 
-Archive and delete use the same project matching in their respective slash and
-terminal palette paths.
+Archive and delete use the same project matching.
 Different root or invoking-session project IDs are allowed only when both known
 projects are Git projects with the same canonical repository. Check that both
 server directories remain readable and resolve to that canonical repository;

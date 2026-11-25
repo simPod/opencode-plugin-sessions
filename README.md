@@ -30,11 +30,13 @@ server slash command before dispatch if the saved model is no longer available.
   session IDs and archive UUIDs are supported. Without an ID, browse the
   current project's native and file archives and select one to restore immediately.
 
-The terminal plugin adds `/archive-session [session-id]` and
-`/session-delete [session-id]`. These use the same handlers as the terminal
-command palette and bypass the model check. `/session-delete` immediately and
-permanently deletes the open session, or the supplied ID, and its descendants
-without confirmation. It stops active work and leaves existing archives
+Archive creation is available only through the server's `/session-archive`
+command. There is no terminal-local archive command or palette action.
+
+The terminal plugin adds `/session-delete [session-id]`. It uses the same
+handler as the terminal command palette and bypasses the model check. It
+immediately and permanently deletes the open session, or the supplied ID, and
+its descendants without confirmation. It stops active work and leaves archives
 unchanged. It is the only delete slash command. Desktop has a built-in **Delete**
 action in its session menu instead.
 
@@ -74,7 +76,7 @@ Desktop restore keeps native question panels and
 returns restored sessions to the list without opening them. Other result panels
 require acknowledgement, not approval of the completed operation. Archive slash
 commands show a start toast and track completion for the invoking visible session.
-On successful slash or palette archive, the plugin closes tabs for the archived
+On successful archive, the plugin closes tabs for the archived
 tree and returns the TUI home if it is viewing that tree. Unrelated views and tabs
 stay open. Slash success includes the exact archived session IDs for this cleanup
 before its completion toast; start and error events do not include them. The
@@ -83,7 +85,7 @@ failure toast still appears after leaving the invoking session.
 These events are not replayed after disconnection; errors still follow the normal
 command error path. Desktop retains result panels when the invoking session
 survives outside the archived tree. Archiving the invoking tree creates no pending
-result form. Terminal-local archive and delete actions show their own toast.
+result form. The terminal delete action shows its own toast.
 
 Archive keeps the target session's saved model. The success message includes a
 note if that model is unavailable at the target location. If the model catalog
@@ -109,11 +111,11 @@ There is no backup or automatic recovery. Descendants from other projects are
 also deleted. Native archives do not protect sessions from permanent deletion;
 use an independent backup when one is required.
 
-The TUI command palette retains **Archive session tree**, **Restore session
-archive**, and **Delete session tree permanently** under **Session archives**.
+The TUI command palette retains **Restore session archive** and **Delete session
+tree permanently** under **Session archives**.
 Restore uses the same searchable TUI picker and opens the restored session.
-Archive and delete act on the open session, close affected tabs, and leave the
-affected chat. Archive uses native flags and its own completion toast.
+Delete acts on the open session, closes affected tabs, and leaves the affected
+chat.
 
 Server slash commands require the server's existing managed-service registration.
 The plugin authenticates with that registration and verifies that it connects to
