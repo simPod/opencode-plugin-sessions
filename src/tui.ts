@@ -218,7 +218,7 @@ export default Plugin.define({
         input?.trim() || (route.type === 'session' ? route.sessionID : undefined);
       if (!sessionID || !SessionID.safeParse(sessionID).success)
         throw new Error(
-          'Use /delete-session [sessionID], or open a session first.',
+          'Use /session-delete [sessionID], or open a session first.',
         );
       const service = new SessionDelete(gateway(context.client, lifetime.signal));
       const preview = await service.preview(sessionID);
@@ -471,7 +471,7 @@ export default Plugin.define({
             'Delete the current session or a session ID and its descendants without an archive',
           group: 'Session archives',
           palette: true,
-          slash: { name: 'delete-session', arguments: true },
+          slash: { name: 'session-delete', arguments: true },
           run: (input) => operate(() => remove(input)),
         },
       ],

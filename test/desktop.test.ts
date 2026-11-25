@@ -213,14 +213,8 @@ function fixture(
         if (archived) item.info.time.archived = 4;
         else delete item.info.time.archived;
       },
-      async remove(id) {
-        events.push('remove');
-        const pending = [id];
-        for (const parentID of pending) {
-          for (const item of state.values())
-            if (item.info.parentID === parentID) pending.push(item.info.id);
-          state.delete(parentID);
-        }
+      async remove() {
+        assert.fail('Desktop session commands must not delete sessions');
       },
       async import(data) {
         events.push('import');
@@ -378,7 +372,6 @@ test('slash archive preserves an unavailable saved model while archiving and res
   const archives = structuredClone(f.bundles);
   f.sessions.export = async () => assert.fail('Native archive must not export');
   f.sessions.import = async () => assert.fail('Native archive must not import');
-  f.sessions.remove = async () => assert.fail('Native archive must not delete');
   f.sessions.busy = async () => true;
   const original = structuredClone(f.state);
   await f.run('session-archive', 'ses_target');
@@ -518,73 +511,64 @@ test('slash archive result failures state native completion and the restore comm
     });
 });
 
-test('archive and delete accept same-repository aliases for the invoking session and target', async (t) => {
-  for (const command of ['session-archive', 'session-delete'])
-    for (const target of ['ses_owner', 'ses_target'])
-      await t.test(`${command}: ${target}`, async () => {
-        const f = fixture();
-        f.state.set('ses_owner', transfer('ses_owner', 'project-alias'));
-        f.state.set('ses_target', transfer('ses_target', 'project-alias'));
-        const other = f.state.get('ses_target');
-        assert(other);
-        other.info.location.directory = '/synthetic/worktree';
-        await f.run(command, target);
-        if (command === 'session-archive')
-          assert.deepEqual(f.events, [`archive:${target}`]);
-        else {
-          assert.deepEqual(f.events, ['remove']);
-          assert(!f.state.has(target));
-        }
-      });
+test('slash archive accepts same-repository aliases for the invoking session and target', async (t) => {
+  for (const target of ['ses_owner', 'ses_target'])
+    await t.test(target, async () => {
+      const f = fixture();
+      f.state.set('ses_owner', transfer('ses_owner', 'project-alias'));
+      const other = transfer('ses_target', 'project-alias');
+      other.info.location.directory = '/synthetic/worktree';
+      f.state.set('ses_target', other);
+      await f.run('session-archive', target);
+      assert.deepEqual(f.events, [`archive:${target}`]);
+    });
 });
 
-test('archive and delete reject roots outside their project or global directory before any write', async (t) => {
-  for (const command of ['session-archive', 'session-delete'])
-    for (const projectID of ['project-a', 'global'])
-      await t.test(`${command}: ${projectID}`, async () => {
-        const f = fixture([], { projectID, directory: '/synthetic/project' });
-        f.state.set('ses_owner', transfer('ses_owner', projectID));
-        const foreign = transfer(
-          'ses_foreign',
-          projectID === 'global' ? 'global' : 'project-b',
-        );
-        foreign.info.location.directory = '/synthetic/other';
-        f.state.set('ses_foreign', foreign);
-        const original = structuredClone(f.state);
-        await assert.rejects(
-          f.run(command, 'ses_foreign'),
-          /another (project|directory)/,
-        );
-        assert.deepEqual(f.state, original);
-        assert.deepEqual(f.events, []);
-      });
+test('slash archive rejects roots outside their project or global directory before any write', async (t) => {
+  for (const projectID of ['project-a', 'global'])
+    await t.test(projectID, async () => {
+      const f = fixture([], { projectID, directory: '/synthetic/project' });
+      f.state.set('ses_owner', transfer('ses_owner', projectID));
+      const foreign = transfer(
+        'ses_foreign',
+        projectID === 'global' ? 'global' : 'project-b',
+      );
+      foreign.info.location.directory = '/synthetic/other';
+      f.state.set('ses_foreign', foreign);
+      const original = structuredClone(f.state);
+      await assert.rejects(
+        f.run('session-archive', 'ses_foreign'),
+        /another (project|directory)/,
+      );
+      assert.deepEqual(f.state, original);
+      assert.deepEqual(f.events, []);
+    });
 });
 
-test('archive and delete require known Git aliases and matching live locations', async (t) => {
-  for (const command of ['session-archive', 'session-delete'])
-    for (const failure of ['unknown', 'non-git', 'moved', 'missing', 'invoker'])
-      await t.test(`${command}: ${failure}`, async () => {
-        const f = fixture();
-        const target = transfer('ses_target', 'project-alias');
-        target.info.location.directory = '/synthetic/worktree';
-        f.state.set('ses_target', target);
-        const alias = f.projects.find((project) => project.id === 'project-alias');
-        assert(alias);
-        if (failure === 'unknown') alias.id = 'unknown-project';
-        if (failure === 'non-git') delete alias.vcs;
-        if (failure === 'moved')
-          f.locations.set('/synthetic/worktree', {
-            id: 'project-b',
-            canonical: '/synthetic/foreign',
-          });
-        if (failure === 'missing') f.locations.delete('/synthetic/worktree');
-        if (failure === 'invoker')
-          f.state.set('ses_owner', transfer('ses_owner', 'project-b'));
-        const original = structuredClone(f.state);
-        await assert.rejects(f.run(command, 'ses_target'));
-        assert.deepEqual(f.state, original);
-        assert.deepEqual(f.events, []);
-      });
+test('slash archive requires known Git aliases and matching live locations', async (t) => {
+  for (const failure of ['unknown', 'non-git', 'moved', 'missing', 'invoker'])
+    await t.test(failure, async () => {
+      const f = fixture();
+      const target = transfer('ses_target', 'project-alias');
+      target.info.location.directory = '/synthetic/worktree';
+      f.state.set('ses_target', target);
+      const alias = f.projects.find((project) => project.id === 'project-alias');
+      assert(alias);
+      if (failure === 'unknown') alias.id = 'unknown-project';
+      if (failure === 'non-git') delete alias.vcs;
+      if (failure === 'moved')
+        f.locations.set('/synthetic/worktree', {
+          id: 'project-b',
+          canonical: '/synthetic/foreign',
+        });
+      if (failure === 'missing') f.locations.delete('/synthetic/worktree');
+      if (failure === 'invoker')
+        f.state.set('ses_owner', transfer('ses_owner', 'project-b'));
+      const original = structuredClone(f.state);
+      await assert.rejects(f.run('session-archive', 'ses_target'));
+      assert.deepEqual(f.state, original);
+      assert.deepEqual(f.events, []);
+    });
 });
 
 test('desktop descendant lookup offers both native and legacy archives but excludes foreign native roots', async () => {
@@ -616,125 +600,6 @@ test('desktop descendant lookup offers both native and legacy archives but exclu
   assert.deepEqual(f.events, ['restore:ses_native', 'restore:ses_child']);
   assert.equal(f.state.get('ses_foreign')?.info.time.archived, 5);
   assert(f.bundles.has(archiveID));
-});
-
-test('desktop delete removes the whole tree immediately without an archive and reports only to a surviving session', async (t) => {
-  for (const target of ['ses_owner', 'ses_target'])
-    await t.test(target, async () => {
-      const f = fixture();
-      f.archived();
-      // Delete must ignore both absent and unavailable saved models.
-      const root = f.state.get(target);
-      assert(root);
-      if (target === 'ses_target')
-        root.info.model = { providerID: 'saved-provider', id: 'saved-model' };
-      let modelLookups = 0;
-      f.model.list = async () => {
-        modelLookups++;
-        throw new Error('Catalog is offline');
-      };
-      const originalArchives = structuredClone(f.bundles);
-      const child = transfer('ses_child', 'project-b');
-      child.info.parentID = target;
-      f.state.set('ses_child', child);
-      const grandchild = transfer('ses_grandchild', 'global');
-      grandchild.info.parentID = 'ses_child';
-      f.state.set('ses_grandchild', grandchild);
-      f.sessions.messages = async () =>
-        assert.fail('Delete must not read transcripts');
-      await f.run('session-delete', target === 'ses_owner' ? '' : target);
-      assert(!f.state.has(target));
-      assert(!f.state.has('ses_child'));
-      assert(!f.state.has('ses_grandchild'));
-      assert.equal(f.state.size, 1);
-      assert.deepEqual(f.bundles, originalArchives);
-      assert.equal(modelLookups, 0);
-      assert.deepEqual(f.events, ['remove']);
-      assert.deepEqual(f.questions, []);
-      assert.equal(f.reports.length, target === 'ses_owner' ? 0 : 1);
-      if (target !== 'ses_owner')
-        assert.match(f.reports[0] ?? '', /No archive was saved/);
-    });
-});
-
-test('desktop delete invalid input makes no changes', async () => {
-  for (const [argument, delivery] of [
-    ['invalid', 'steer'],
-    ['ses_owner ses_target', 'steer'],
-    ['', 'queue'],
-  ] as const) {
-    const f = fixture();
-    await assert.rejects(
-      f.run('session-delete', argument, delivery),
-      delivery === 'queue' ? /cannot be queued/ : /Use \/session-delete/,
-    );
-    assert.deepEqual(f.questions, []);
-    assert.deepEqual(f.events, []);
-  }
-});
-
-test('desktop delete rechecks the captured tree and plugin lifetime before deletion', async (t) => {
-  for (const change of [
-    'descendant',
-    'project',
-    'parent',
-    'location',
-    'title',
-    'unload',
-  ])
-    await t.test(change, async () => {
-      const f = fixture();
-      const get = f.sessions.get;
-      let reads = 0;
-      f.sessions.get = async (id) => {
-        if (id !== 'ses_target' || ++reads !== (change === 'unload' ? 1 : 2))
-          return get(id);
-        const target = f.state.get('ses_target');
-        assert(target);
-        if (change === 'descendant') {
-          const child = transfer('ses_child');
-          child.info.parentID = 'ses_target';
-          f.state.set('ses_child', child);
-        } else if (change === 'project') target.info.projectID = 'project-b';
-        else if (change === 'parent') target.info.parentID = 'ses_owner';
-        else if (change === 'location')
-          target.info.location.directory = '/synthetic/moved';
-        else if (change === 'title') target.info.title = 'Renamed';
-        else f.abort.abort();
-        return get(id);
-      };
-      await assert.rejects(
-        f.run('session-delete', 'ses_target'),
-        change === 'unload' ? { name: 'AbortError' } : /family changed/,
-      );
-      assert(f.state.has('ses_target'));
-      assert.deepEqual(f.events, []);
-    });
-});
-
-test('desktop delete reports incomplete or unverified deletion without claiming a backup', async (t) => {
-  for (const failure of ['remove', 'remaining', 'verification', 'report'])
-    await t.test(failure, async () => {
-      const f = fixture();
-      if (failure === 'remove')
-        f.sessions.remove = async () => {
-          throw new Error('Disconnected');
-        };
-      else if (failure === 'remaining') f.sessions.remove = async () => {};
-      else if (failure === 'verification')
-        f.sessions.existing = async () => {
-          throw new Error('Disconnected');
-        };
-      else f.failReport();
-      await assert.rejects(
-        f.run('session-delete', 'ses_target'),
-        failure === 'report'
-          ? /was deleted.*No archive was saved/
-          : /Deletion.*No backup was created/,
-      );
-      assert.deepEqual(f.bundles, new Map());
-      assert.deepEqual(f.reports, []);
-    });
 });
 
 test('desktop restore by archive, root, or descendant ID imports the whole tree without a picker', async (t) => {
@@ -985,7 +850,7 @@ test('desktop refuses a second operation while another command waits for archive
   const pending = f.run('session-restore');
   await entered;
   try {
-    await assert.rejects(f.run('session-delete'), /operation is in progress/);
+    await assert.rejects(f.run('session-archive'), /operation is in progress/);
   } finally {
     release();
     await pending;

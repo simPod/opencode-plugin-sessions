@@ -1,7 +1,6 @@
 import type { CommandDefinition } from '@opencode/plugin/promise/command';
 import { randomUUID } from 'node:crypto';
 import type { DesktopHost } from './desktop-client.ts';
-import { SessionDelete } from './delete.ts';
 import {
   NativeSessionArchive,
   archiveResultMessage,
@@ -74,7 +73,7 @@ export function desktopCommands(
             const host = await connect();
             const session = await host.sessions.get(sessionID);
             const belongs =
-              name === 'session-archive' || name === 'session-delete'
+              name === 'session-archive'
                 ? await matchesProject(host.projects, scope, {
                     projectID: session.projectID,
                     directory: session.location.directory,
@@ -298,36 +297,6 @@ export function desktopCommands(
       'session-restore',
       'Restore a native session archive or legacy file archive from this project',
       restore,
-    ),
-    command(
-      'session-delete',
-      'Permanently delete a session tree without saving an archive',
-      async (host, sessionID, argument) => {
-        const target = argument || sessionID;
-        if (!SessionID.safeParse(target).success)
-          throw new Error('Use /session-delete [sessionID].');
-        const service = new SessionDelete(host.sessions);
-        const preview = await service.preview(target);
-        if (!(await matchesProject(host.projects, scope, preview)))
-          throw new Error(
-            'The session belongs to another project. Nothing was deleted.',
-          );
-        signal.throwIfAborted();
-        await service.remove(preview);
-        if (!preview.sessionIDs.includes(sessionID)) {
-          try {
-            await host.report(
-              sessionID,
-              'Session tree deleted',
-              `${preview.sessionIDs.length} session(s) permanently deleted. No archive was saved.`,
-            );
-          } catch {
-            throw new Error(
-              'The tree was deleted, but the desktop result could not be shown. No archive was saved.',
-            );
-          }
-        }
-      },
     ),
   ];
 }

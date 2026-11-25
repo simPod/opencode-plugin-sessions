@@ -270,7 +270,11 @@ async function scenario(pluginURL: string) {
   assert(remove.palette);
   assert.deepEqual(archive.slash, { name: 'archive-session', arguments: true });
   assert.equal(restore.slash, undefined);
-  assert.deepEqual(remove.slash, { name: 'delete-session', arguments: true });
+  assert.deepEqual(remove.slash, { name: 'session-delete', arguments: true });
+  assert.deepEqual(
+    commands.filter((command) => command.slash?.name.includes('delete')),
+    [remove],
+  );
   const nativeChild = structuredClone(original);
   nativeChild.info.id = 'ses_child';
   nativeChild.info.parentID = 'ses_test';
@@ -524,8 +528,13 @@ async function scenario(pluginURL: string) {
             state.set('ses_added', added);
           }
         : undefined;
-    // Current-session deletion can target a child without deleting its parent.
+    // A delete without arguments can target an open child without deleting its parent.
     const argument = outcome === 'delete-current' ? undefined : 'ses_test';
+    session(initialRoute.sessionID).info.model = {
+      providerID: 'saved-provider',
+      id: 'saved-model',
+      variant: 'high',
+    };
     const beforeModelLookups: number = modelLocations.length;
     await remove.run(argument);
     assert.equal(modelLocations.length, beforeModelLookups);
@@ -559,9 +568,9 @@ async function scenario(pluginURL: string) {
   beforeSessionGet = undefined;
   route = { type: 'home' };
   await remove.run();
-  assert.match(toasts.at(-1)?.message ?? '', /Use \/delete-session/);
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
   await remove.run('invalid');
-  assert.match(toasts.at(-1)?.message ?? '', /Use \/delete-session/);
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
 
   // The palette uses the same alias check as slash commands, not the cached
   // project ID or the target's own project as the command's scope.

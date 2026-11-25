@@ -14,9 +14,9 @@ native picker, or patch its filters.
 
 ## Commands and clients
 
-Provide four desktop and TUI slash commands: `/session-id`,
-`/session-archive [session-id]`, `/session-restore [session-id | archive-id]`, and
-`/session-delete [session-id]`. Do not invoke a model. Keep the old
+Provide `/session-id`, `/session-archive [session-id]`, and
+`/session-restore [session-id | archive-id]` in Desktop and the terminal. Do not
+invoke a model. Keep the old
 `/session-unarchive` and `/session-archives` names removed, without aliases.
 
 Session ID shows the exact invoking session ID, including a child ID, in a native
@@ -26,11 +26,11 @@ Archive, restore, and delete run immediately without confirmation and cannot be
 queued. Without an ID, archive and delete use the open session; restore opens a
 picker. Selecting a row restores it immediately; cancellation makes no changes.
 
-The server owns the `/session-*` callbacks in both clients. The TUI also exposes
-`/archive-session [session-id]` and `/delete-session [session-id]` through the
-same handlers as its palette actions. These commands bypass the terminal model
-check. Keep the names distinct so each slash command appears once. Retain the
-permanent-delete warning. See [ADR 0014](adr/0014-model-free-terminal-archive-and-delete.md).
+The TUI exposes `/archive-session [session-id]` and `/session-delete [session-id]`
+through its palette handlers. These commands bypass the terminal model check.
+Register delete only in the terminal, under `/session-delete`, without aliases.
+Desktop keeps its built-in Delete action. Retain the permanent-delete warning.
+See [ADR 0015](adr/0015-single-terminal-delete-command.md).
 
 Desktop uses native question panels. Terminal restore recognizes plugin-marked
 selection forms for the visible session. Await cancellation of the original form
@@ -72,11 +72,12 @@ and close only its tabs. Palette archive uses the same existing cleanup with the
 exact archived IDs. Palette delete retains its existing departure and tab cleanup.
 Desktop restore does not automatically open a session.
 
-Slash commands require the host's managed-service registration and verify that
-the connection reaches the hosting plugin instance. Refuse standalone or
-embedded slash hosts without it. TUI palette actions use their existing connected
-client and server RPCs, including remote and standalone support. Never discover
-or start another server. Forms have no originating-client identity: another
+Server slash commands require the host's managed-service registration and verify
+that the connection reaches the hosting plugin instance. Refuse standalone or
+embedded server slash hosts without it. Terminal-local slash commands and
+palette actions use their existing connected client and server RPCs, including
+remote and standalone support. Never discover or start another server. Forms
+have no originating-client identity: another
 client viewing the same session can answer them. Use one client for restore;
 the cancelled form is not an exclusive client claim. After successful cancellation,
 the popup is not durable. Cancellation or reload before a choice requires running
@@ -91,7 +92,8 @@ root-project scope and exact-directory scope for the shared non-Git `global`
 project. Use the public session update API with `archived: true` for each session,
 descendants before the root, and read back each flag to verify the update.
 
-Archive and delete share project matching in both slash and TUI palette paths.
+Archive and delete use the same project matching in their respective slash and
+terminal palette paths.
 Different root or invoking-session project IDs are allowed only when both known
 projects are Git projects with the same canonical repository. Check that both
 server directories remain readable and resolve to that canonical repository;
