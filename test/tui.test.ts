@@ -54,6 +54,7 @@ async function scenario(pluginURL: string) {
   let commands: Layer['commands'];
   const selections: Array<readonly { value: string }[]> = [];
   const lookups: Array<{ sessionID?: string }> = [];
+  const modelLocations: Array<string | undefined> = [];
   let route: ReturnType<Plugin.Context['ui']['router']['current']> = {
     type: 'session',
     sessionID: 'ses_test',
@@ -97,6 +98,12 @@ async function scenario(pluginURL: string) {
           },
         }),
       },
+      model: {
+        async list(input) {
+          modelLocations.push(input?.location?.directory);
+          return { location: { directory: '/synthetic/worktree' }, data: [] };
+        },
+      } satisfies Pick<Plugin.Context['client']['model'], 'list'>,
       project: {
         list: async () => [
           { id: 'test-project', canonical: '/synthetic/project', vcs: 'git' },
@@ -279,6 +286,12 @@ async function scenario(pluginURL: string) {
   unrelated.info.id = 'ses_other';
   state.set('ses_other', unrelated);
   route = { type: 'session', sessionID: 'ses_test' };
+  session('ses_test').info.location.directory = '/synthetic/worktree';
+  session('ses_test').info.model = {
+    providerID: 'saved-provider',
+    id: 'saved-model',
+    variant: 'high',
+  };
   const expectedRestoredState = structuredClone(state);
   // Existing files remain untouched; new archives only update native flags.
   bundles.set(savedID, {
@@ -316,6 +329,11 @@ async function scenario(pluginURL: string) {
   assert.equal(toasts.at(-1)?.variant, 'success');
   assert.match(toasts.at(-1)?.message ?? '', /archived natively/i);
   assert.match(toasts.at(-1)?.message ?? '', /\/session-restore ses_test/);
+  assert.match(
+    toasts.at(-1)?.message ?? '',
+    /saved-provider\/saved-model is unavailable/,
+  );
+  assert.deepEqual(modelLocations, ['/synthetic/worktree']);
   assert.doesNotMatch(toasts.at(-1)?.message ?? '', /Server file|backup/i);
   await restore.run('ses_child');
   assert.deepEqual(state, expectedRestoredState);
@@ -509,7 +527,9 @@ async function scenario(pluginURL: string) {
         : undefined;
     // Current-session deletion can target a child without deleting its parent.
     const argument = outcome === 'delete-current' ? undefined : 'ses_test';
+    const beforeModelLookups: number = modelLocations.length;
     await remove.run(argument);
+    assert.equal(modelLocations.length, beforeModelLookups);
     if (
       outcome === 'delete-current' ||
       outcome === 'delete-tree' ||

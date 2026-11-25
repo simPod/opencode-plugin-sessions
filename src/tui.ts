@@ -3,7 +3,11 @@ import { Plugin } from '@opencode/plugin/tui';
 import { SessionDelete } from './delete.ts';
 import { fingerprint } from './fingerprint.ts';
 import { gateway } from './gateway.ts';
-import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
+import {
+  NativeSessionArchive,
+  archiveResultMessage,
+  restoreArchives,
+} from './native-archive.ts';
 import { Archives } from './rpc.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -182,7 +186,11 @@ export default Plugin.define({
       leaveTree(preview.sessionIDs, viewingTree);
       context.ui.toast.show({
         title: 'Session tree archived',
-        message: `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${sessionID}.`,
+        message: await archiveResultMessage(
+          preview,
+          context.client.model,
+          lifetime.signal,
+        ),
         variant: 'success',
       });
     }

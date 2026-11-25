@@ -1,4 +1,4 @@
-import type { SessionInfo } from '@opencode/client';
+import type { OpenCodeClient, SessionInfo } from '@opencode/client';
 import type { SessionGateway } from './gateway.ts';
 import { SessionID, type ArchiveStorage, type RestoreSummary } from './schema.ts';
 
@@ -11,7 +11,30 @@ export interface NativeArchivePreview {
   rootSessionID: string;
   projectID: string;
   directory: string;
+  location: SessionInfo['location'];
   sessionIDs: string[];
+  model: SessionInfo['model'];
+}
+
+export async function archiveResultMessage(
+  preview: NativeArchivePreview,
+  catalog: Pick<OpenCodeClient['model'], 'list'>,
+  signal: AbortSignal,
+): Promise<string> {
+  const message = `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${preview.rootSessionID}.`;
+  if (!preview.model) return message;
+  const { providerID, id } = preview.model;
+  try {
+    const { data } = await catalog.list(
+      { location: preview.location },
+      { signal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]) },
+    );
+    if (!data.some((model) => model.providerID === providerID && model.id === id))
+      return `${message}\nNote: Saved model ${providerID}/${id} is unavailable at this location. It was kept.`;
+  } catch {
+    // An unreadable catalog cannot establish that the saved model is unavailable.
+  }
+  return message;
 }
 
 export class NativeSessionArchive {
@@ -38,7 +61,9 @@ export class NativeSessionArchive {
       rootSessionID,
       projectID: root.projectID,
       directory: root.location.directory,
+      location: root.location,
       sessionIDs: family.map((session) => session.id),
+      model: root.model,
     };
   }
 

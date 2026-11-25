@@ -2,7 +2,11 @@ import type { CommandDefinition } from '@opencode/plugin/promise/command';
 import { randomUUID } from 'node:crypto';
 import type { DesktopHost } from './desktop-client.ts';
 import { SessionDelete } from './delete.ts';
-import { NativeSessionArchive, restoreArchives } from './native-archive.ts';
+import {
+  NativeSessionArchive,
+  archiveResultMessage,
+  restoreArchives,
+} from './native-archive.ts';
 import { fingerprint } from './fingerprint.ts';
 import { canRestore } from './restore-storage.ts';
 import {
@@ -260,7 +264,7 @@ export function desktopCommands(
           );
         signal.throwIfAborted();
         await service.archive(preview);
-        const message = `${preview.sessionIDs.length} session(s) archived natively. Restore with /session-restore ${target}.`;
+        const message = await archiveResultMessage(preview, host.model, signal);
         // Do not leave a result form pending on an archived tree.
         if (!preview.sessionIDs.includes(sessionID)) {
           try {

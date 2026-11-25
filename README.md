@@ -82,6 +82,11 @@ result form. No result panel is attached to a deleted session. After archiving o
 deleting the open session through a slash command, open another session from the
 session list afterward. Palette actions keep their own toast.
 
+Archive keeps the target session's saved model. The success message includes a
+note if that model is unavailable at the target location. If the model catalog
+cannot be read, archive still succeeds without a note. Delete does not check
+the model catalog.
+
 The terminal picker handles forms for the visible session. OpenCode does not
 identify the client that started a form; another client viewing that session can
 also see or answer it. Use one client for restore. After the native form is

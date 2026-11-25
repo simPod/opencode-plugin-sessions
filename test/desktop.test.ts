@@ -5,6 +5,7 @@ import type {
   FormAnswer,
   FormFields,
   FormMetadata,
+  ModelInfo,
   SessionTransferData,
 } from '@opencode/client';
 import { Session } from '@opencode/schema/session';
@@ -48,6 +49,22 @@ function transfer(id: string, projectID = 'project-a'): SessionTransferData {
         text: `Private transcript ${id}: č 🌱`,
       },
     ],
+  };
+}
+
+function catalogModel(providerID: string, id: string): ModelInfo {
+  return {
+    id,
+    modelID: 'upstream-model',
+    providerID,
+    name: id,
+    capabilities: { tools: true, input: ['text'], output: ['text'] },
+    variants: [],
+    time: { released: 0 },
+    cost: [],
+    status: 'active',
+    enabled: true,
+    limit: { context: 1000, output: 100 },
   };
 }
 
@@ -141,6 +158,9 @@ function fixture(
     },
   };
   const host: DesktopHost = {
+    model: {
+      list: async () => ({ location: { directory: scope.directory }, data: [] }),
+    },
     projects: {
       async list() {
         return structuredClone(projects);
@@ -287,6 +307,7 @@ function fixture(
     lookups,
     recovery,
     abort,
+    model: host.model,
     sessions: host.sessions,
     projects,
     locations,
@@ -329,8 +350,24 @@ test('session-id refuses a target argument instead of reporting another session'
   assert.deepEqual(f.reports, []);
 });
 
-test('slash archive flags the cross-project tree root last and restores it without file transfer', async () => {
+test('slash archive preserves an unavailable saved model while archiving and restoring a cross-project tree', async () => {
   const f = fixture();
+  const target = f.state.get('ses_target');
+  assert(target);
+  target.info.location.directory = '/synthetic/worktree';
+  target.info.model = {
+    providerID: 'saved-provider',
+    id: 'saved-model',
+    variant: 'high',
+  };
+  const modelLocations: Array<string | undefined> = [];
+  f.model.list = async (input) => {
+    modelLocations.push(input?.location?.directory);
+    return {
+      location: target.info.location,
+      data: [catalogModel('other-provider', 'saved-model')],
+    };
+  };
   const child = transfer('ses_child', 'project-b');
   child.info.parentID = 'ses_target';
   child.info.location.directory = '/synthetic/foreign';
@@ -353,6 +390,12 @@ test('slash archive flags the cross-project tree root last and restores it witho
   }
   assert.deepEqual(f.state, archived);
   assert.deepEqual(f.bundles, archives);
+  assert.deepEqual(modelLocations, ['/synthetic/worktree']);
+  assert.equal(f.feedback.at(-1)?.variant, 'success');
+  assert.match(
+    f.feedback.at(-1)?.message ?? '',
+    /saved-provider\/saved-model is unavailable/,
+  );
   await f.run('session-restore', 'ses_child');
   assert.deepEqual(f.state, original);
   assert.deepEqual(f.events, [
@@ -365,6 +408,7 @@ test('slash archive flags the cross-project tree root last and restores it witho
   assert.deepEqual(f.questions, []);
   assert.match(f.reports[0] ?? '', /archived natively/i);
   assert.match(f.reports[0] ?? '', /\/session-restore ses_target/);
+  assert.match(f.reports[0] ?? '', /saved-provider\/saved-model is unavailable/);
   assert.doesNotMatch(f.reports[0] ?? '', /Server file|backup|Archive retained/i);
   assert.match(f.reports[1] ?? '', /Open ses_target/);
 });
@@ -389,6 +433,32 @@ test('slash archive reports success for the archived open session without attach
   assert.deepEqual(f.feedback[1]?.sessionIDs, ['ses_owner', 'ses_child']);
   assert.match(f.feedback[1]?.message ?? '', /2 session\(s\).*archived natively/i);
   assert.match(f.feedback[1]?.message ?? '', /\/session-restore ses_owner/);
+});
+
+test('slash archive omits the note for an available model or an unreadable catalog', async (t) => {
+  for (const catalog of ['available', 'unreadable'])
+    await t.test(catalog, async () => {
+      const f = fixture();
+      const owner = f.state.get('ses_owner');
+      assert(owner);
+      const saved = { providerID: 'saved-provider', id: 'saved-model' };
+      owner.info.model = saved;
+      let modelLookups = 0;
+      f.model.list = async () => {
+        modelLookups++;
+        if (catalog === 'unreadable') throw new Error('Catalog is offline');
+        return {
+          location: owner.info.location,
+          data: [catalogModel(saved.providerID, saved.id)],
+        };
+      };
+      await f.run('session-archive');
+      assert.equal(modelLookups, 1);
+      assert.equal(owner.info.time.archived, 4);
+      assert.deepEqual(owner.info.model, saved);
+      assert.equal(f.feedback.at(-1)?.variant, 'success');
+      assert.doesNotMatch(f.feedback.at(-1)?.message ?? '', /Note:/);
+    });
 });
 
 test('slash archive reports rejected and partial updates without claiming success', async (t) => {
@@ -553,6 +623,16 @@ test('desktop delete removes the whole tree immediately without an archive and r
     await t.test(target, async () => {
       const f = fixture();
       f.archived();
+      // Delete must ignore both absent and unavailable saved models.
+      const root = f.state.get(target);
+      assert(root);
+      if (target === 'ses_target')
+        root.info.model = { providerID: 'saved-provider', id: 'saved-model' };
+      let modelLookups = 0;
+      f.model.list = async () => {
+        modelLookups++;
+        throw new Error('Catalog is offline');
+      };
       const originalArchives = structuredClone(f.bundles);
       const child = transfer('ses_child', 'project-b');
       child.info.parentID = target;
@@ -568,6 +648,7 @@ test('desktop delete removes the whole tree immediately without an archive and r
       assert(!f.state.has('ses_grandchild'));
       assert.equal(f.state.size, 1);
       assert.deepEqual(f.bundles, originalArchives);
+      assert.equal(modelLookups, 0);
       assert.deepEqual(f.events, ['remove']);
       assert.deepEqual(f.questions, []);
       assert.equal(f.reports.length, target === 'ses_owner' ? 0 : 1);
