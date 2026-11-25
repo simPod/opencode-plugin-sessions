@@ -16,9 +16,9 @@ existing files are not rewritten, moved, or removed.
 
 ## Commands
 
-The server plugin adds slash commands in desktop and TUI. The TUI plugin adds
-command-palette actions, without duplicate slash entries. Neither submits prompts
-to a model:
+The server plugin adds the following slash commands in desktop and TUI. The
+commands do not submit prompts to a model, but the stock terminal can reject a
+server slash command before dispatch if the saved model is no longer available.
 
 - `/session-id`: show the exact current session ID in a result panel. No arguments
   are accepted; sessions and archive files are not changed.
@@ -32,6 +32,11 @@ to a model:
 - `/session-delete [session-id]`: permanently delete the current session, or the
   supplied ID, and its descendants immediately, without confirmation. No archive
   is saved. Active work is stopped. Existing archive files are not changed.
+
+In the terminal, use `/archive-session [session-id]` or
+`/delete-session [session-id]` to bypass that model check. They run the same
+actions as the terminal command palette, even if the saved model is unavailable.
+The desktop command names are unchanged.
 
 Native archive creation includes descendants from other projects. Archive and
 delete require the root to belong to the current project. Different project IDs

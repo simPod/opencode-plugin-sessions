@@ -26,10 +26,11 @@ Archive, restore, and delete run immediately without confirmation and cannot be
 queued. Without an ID, archive and delete use the open session; restore opens a
 picker. Selecting a row restores it immediately; cancellation makes no changes.
 
-The server owns slash-command callbacks in both clients. Register TUI actions
-only in the command palette, so each slash command appears once. Update archive
-and restore descriptions to distinguish native creation and mixed-source
-restore; retain the permanent-delete warning.
+The server owns the `/session-*` callbacks in both clients. The TUI also exposes
+`/archive-session [session-id]` and `/delete-session [session-id]` through the
+same handlers as its palette actions. These commands bypass the terminal model
+check. Keep the names distinct so each slash command appears once. Retain the
+permanent-delete warning. See [ADR 0014](adr/0014-model-free-terminal-archive-and-delete.md).
 
 Desktop uses native question panels. Terminal restore recognizes plugin-marked
 selection forms for the visible session. Await cancellation of the original form

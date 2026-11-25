@@ -218,7 +218,7 @@ export default Plugin.define({
         input?.trim() || (route.type === 'session' ? route.sessionID : undefined);
       if (!sessionID || !SessionID.safeParse(sessionID).success)
         throw new Error(
-          'Use /session-delete [sessionID], or open a session first.',
+          'Use /delete-session [sessionID], or open a session first.',
         );
       const service = new SessionDelete(gateway(context.client, lifetime.signal));
       const preview = await service.preview(sessionID);
@@ -441,8 +441,7 @@ export default Plugin.define({
       });
     });
 
-    // The server owns slash entries in both clients. TUI entries are palette-only
-    // because OpenCode combines both slash lists without deduplicating names.
+    // Local slash names are distinct from server names because OpenCode lists both.
     context.keymap.layer(() => ({
       mode: 'global',
       commands: [
@@ -453,6 +452,7 @@ export default Plugin.define({
             'Archive the current session or a session ID natively, including descendants',
           group: 'Session archives',
           palette: true,
+          slash: { name: 'archive-session', arguments: true },
           run: (input) => operate(() => archive(input)),
         },
         {
@@ -471,6 +471,7 @@ export default Plugin.define({
             'Delete the current session or a session ID and its descendants without an archive',
           group: 'Session archives',
           palette: true,
+          slash: { name: 'delete-session', arguments: true },
           run: (input) => operate(() => remove(input)),
         },
       ],

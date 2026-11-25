@@ -253,10 +253,6 @@ async function scenario(pluginURL: string) {
   const cleanup = await plugin.setup(context as unknown as Plugin.Context);
   assert(typeof cleanup === 'function');
   assert(commands);
-  assert(
-    commands.every((command) => !command.slash),
-    'Only server commands must contribute slash entries',
-  );
   const archive = commands.find(
     (command) => command.id === 'simpod.session-archive.archive',
   );
@@ -272,6 +268,9 @@ async function scenario(pluginURL: string) {
   assert(archive.palette);
   assert(restore.palette);
   assert(remove.palette);
+  assert.deepEqual(archive.slash, { name: 'archive-session', arguments: true });
+  assert.equal(restore.slash, undefined);
+  assert.deepEqual(remove.slash, { name: 'delete-session', arguments: true });
   const nativeChild = structuredClone(original);
   nativeChild.info.id = 'ses_child';
   nativeChild.info.parentID = 'ses_test';
@@ -560,9 +559,9 @@ async function scenario(pluginURL: string) {
   beforeSessionGet = undefined;
   route = { type: 'home' };
   await remove.run();
-  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/delete-session/);
   await remove.run('invalid');
-  assert.match(toasts.at(-1)?.message ?? '', /Use \/session-delete/);
+  assert.match(toasts.at(-1)?.message ?? '', /Use \/delete-session/);
 
   // The palette uses the same alias check as slash commands, not the cached
   // project ID or the target's own project as the command's scope.
@@ -612,7 +611,7 @@ async function scenario(pluginURL: string) {
   console.log('Archive, restore, and delete completed without confirmation.');
 }
 
-test('TUI palette actions archive, restore, and delete immediately without duplicate slash entries', async () => {
+test('model-free terminal slash and palette actions act on the correct session tree', async () => {
   const script = `await (${scenario.toString()})(${JSON.stringify(new URL('../src/tui.ts', import.meta.url).href)});`;
   const result = await execute(
     process.execPath,
