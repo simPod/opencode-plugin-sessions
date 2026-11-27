@@ -321,29 +321,6 @@ function fixture(
   };
 }
 
-test('session-id reports the exact current root or child ID without changing sessions or archives', async () => {
-  const f = fixture();
-  const child = transfer('ses_child');
-  child.info.parentID = 'ses_owner';
-  f.state.set('ses_child', child);
-  f.archived();
-  const sessions = structuredClone(f.state);
-  const archives = structuredClone(f.bundles);
-  await f.run('session-id');
-  await f.run('session-id', '  ', 'steer', 'ses_child');
-  assert.deepEqual(f.reports, ['ses_owner', 'ses_child']);
-  assert.deepEqual(f.state, sessions);
-  assert.deepEqual(f.bundles, archives);
-  assert.deepEqual(f.events, []);
-  assert.deepEqual(f.lookups, []);
-});
-
-test('session-id refuses a target argument instead of reporting another session', async () => {
-  const f = fixture();
-  await assert.rejects(f.run('session-id', 'ses_target'), /without arguments/);
-  assert.deepEqual(f.reports, []);
-});
-
 test('slash archive preserves an unavailable saved model while archiving and restoring a cross-project tree', async () => {
   const f = fixture();
   const target = f.state.get('ses_target');

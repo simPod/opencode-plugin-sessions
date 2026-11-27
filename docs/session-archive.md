@@ -14,13 +14,10 @@ native picker, or patch its filters.
 
 ## Commands and clients
 
-Provide `/session-id`, `/session-archive [session-id]`, and
+Provide `/session-archive [session-id]` and
 `/session-restore [session-id | archive-id]` in Desktop and the terminal. Do not
 invoke a model. Keep the old
 `/session-unarchive` and `/session-archives` names removed, without aliases.
-
-Session ID shows the exact invoking session ID, including a child ID, in a native
-result panel. Accept no arguments and do not change sessions or archive files.
 
 Archive, restore, and delete run immediately without confirmation and cannot be
 queued. Without an ID, archive and delete use the open session; restore opens a

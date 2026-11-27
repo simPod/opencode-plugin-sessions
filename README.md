@@ -20,8 +20,6 @@ The server plugin adds the following slash commands in desktop and TUI. The
 commands do not submit prompts to a model, but the stock terminal can reject a
 server slash command before dispatch if the saved model is no longer available.
 
-- `/session-id`: show the exact current session ID in a result panel. No arguments
-  are accepted; sessions and archive files are not changed.
 - `/session-archive [session-id]`: set and verify native archive flags on the
   current session, or the supplied ID, and its current descendants, root last,
   without confirmation.

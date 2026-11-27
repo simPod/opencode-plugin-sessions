@@ -241,14 +241,6 @@ export function desktopCommands(
 
   return [
     command(
-      'session-id',
-      'Show the exact current session ID without calling a model',
-      async (host, sessionID, argument) => {
-        if (argument) throw new Error('Use /session-id without arguments.');
-        await host.report(sessionID, 'Current session ID', sessionID);
-      },
-    ),
-    command(
       'session-archive',
       'Archive a session tree using native OpenCode archive state',
       async (host, sessionID, argument, operationID) => {
